@@ -128,6 +128,9 @@ export function TopNav() {
   }
 
   const navItems = session.role === "admin" ? adminNavItems : userNavItems;
+  // 只有一个标签时（普通用户只能进画图）就别渲染导航条了，
+  // 单独一个"画图"挂在中间反而像 placeholder，logo 已经指向 /image 够用了。
+  const showNav = navItems.length > 1;
   const roleLabel = session.role === "admin" ? "管理员" : "普通用户";
   const displayName = session.name.trim() || roleLabel;
 
@@ -158,7 +161,7 @@ export function TopNav() {
           </Link>
           <span className="hidden h-5 w-px bg-border lg:block" />
           <a
-            href="https://github.com/basketikun/chatgpt2api"
+            href="https://github.com/RemotePinee/ChatGPT2API"
             target="_blank"
             rel="noreferrer"
             className="hidden cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-[13px] leading-none text-muted-foreground transition hover:bg-secondary hover:text-foreground lg:inline-flex"
@@ -168,6 +171,7 @@ export function TopNav() {
             <span className="translate-y-[1px]">GitHub</span>
           </a>
         </div>
+        {showNav ? (
         <nav
           ref={navRef}
           className="hide-scrollbar relative -mx-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 sm:justify-center sm:gap-0.5 sm:overflow-visible sm:px-0"
@@ -216,6 +220,9 @@ export function TopNav() {
             }}
           />
         </nav>
+        ) : (
+          <div className="min-w-0 flex-1" aria-hidden />
+        )}
         <div className="flex shrink-0 items-center justify-end gap-2">
           <span className="hidden items-center gap-1.5 rounded-md border border-border/70 bg-card px-2 py-1 text-[11px] leading-none text-muted-foreground lg:inline-flex">
             <span className="relative flex size-1.5">

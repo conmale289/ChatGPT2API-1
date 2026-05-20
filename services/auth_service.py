@@ -37,6 +37,13 @@ class AuthService:
     def _default_name(role: object) -> str:
         return "管理员密钥" if str(role or "").strip().lower() == "admin" else "普通用户"
 
+    @staticmethod
+    def _coerce_int(value: object, default: int = 0) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return default
+
     def _normalize_item(self, raw: object) -> dict[str, object] | None:
         if not isinstance(raw, dict):
             return None
@@ -58,6 +65,11 @@ class AuthService:
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
+            # 一次性额度模型：quota=本次分配上限，used=累计已扣，
+            # unlimited=True 时不阻断也不计算 remaining。
+            "quota": self._coerce_int(raw.get("quota"), 0),
+            "used": self._coerce_int(raw.get("used"), 0),
+            "unlimited": bool(raw.get("unlimited", False)),
         }
 
     def _load(self) -> list[dict[str, object]]:
@@ -77,6 +89,11 @@ class AuthService:
 
     @staticmethod
     def _public_item(item: dict[str, object]) -> dict[str, object]:
+        quota = AuthService._coerce_int(item.get("quota"), 0)
+        used = AuthService._coerce_int(item.get("used"), 0)
+        unlimited = bool(item.get("unlimited", False))
+        # 普通用户在前端读自己的剩余时直接拿这条，admin 同样会看到（admin 自己 unlimited=True、quota=0）。
+        remaining = None if unlimited else max(0, quota - used)
         return {
             "id": item.get("id"),
             "name": item.get("name"),
@@ -84,6 +101,10 @@ class AuthService:
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
+            "quota": quota,
+            "used": used,
+            "unlimited": unlimited,
+            "remaining": remaining,
         }
 
     def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
@@ -147,7 +168,14 @@ class AuthService:
             raise ValueError("这个名称已经在使用中了，换一个更容易区分的名称吧")
         return candidate
 
-    def create_key(self, *, role: AuthRole, name: str = "") -> tuple[dict[str, object], str]:
+    def create_key(
+        self,
+        *,
+        role: AuthRole,
+        name: str = "",
+        quota: int = 0,
+        unlimited: bool = False,
+    ) -> tuple[dict[str, object], str]:
         with self._lock:
             self._reload_locked()
             normalized_name = self._build_name_locked(name, role=role)
@@ -166,6 +194,10 @@ class AuthService:
                 "enabled": True,
                 "created_at": _now_iso(),
                 "last_used_at": None,
+                # admin 默认无限；user 默认按传入 quota，0 即不可用，需要再分配。
+                "quota": self._coerce_int(quota, 0),
+                "used": 0,
+                "unlimited": bool(unlimited) if role == "user" else True,
             }
             self._items.append(item)
             self._save()
@@ -200,10 +232,74 @@ class AuthService:
                     next_item["enabled"] = bool(updates.get("enabled"))
                 if "key" in updates and updates.get("key") is not None:
                     next_item["key_hash"] = self._build_key_hash_locked(str(updates.get("key") or ""), exclude_id=normalized_id)
+                if next_role == "user":
+                    if "quota" in updates and updates.get("quota") is not None:
+                        next_item["quota"] = self._coerce_int(updates.get("quota"), 0)
+                    if "unlimited" in updates and updates.get("unlimited") is not None:
+                        next_item["unlimited"] = bool(updates.get("unlimited"))
+                    # 管理员手动重置已用计数：传 reset_used=True 就把 used 归零
+                    if updates.get("reset_used"):
+                        next_item["used"] = 0
+                else:
+                    # admin 永远 unlimited，quota/used 字段保持稳定不被外部改坏
+                    next_item["unlimited"] = True
+                    next_item["quota"] = 0
+                    next_item["used"] = 0
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
         return None
+
+    def get_by_id(self, key_id: str) -> dict[str, object] | None:
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            for item in self._items:
+                if item.get("id") == normalized_id:
+                    return self._public_item(item)
+        return None
+
+    def consume_quota(self, key_id: str, amount: int) -> dict[str, object]:
+        """扣减用户密钥额度。返回 {ok, remaining, unlimited, reason}。
+        admin / unlimited 直接放行；普通用户额度不足时 ok=False 且不写入。"""
+        normalized_id = self._clean(key_id)
+        delta = max(0, int(amount or 0))
+        if not normalized_id or delta == 0:
+            return {"ok": True, "remaining": None, "unlimited": True, "reason": ""}
+        with self._lock:
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                role = str(item.get("role") or "").strip().lower()
+                if role == "admin" or bool(item.get("unlimited", False)):
+                    return {"ok": True, "remaining": None, "unlimited": True, "reason": ""}
+                quota = self._coerce_int(item.get("quota"), 0)
+                used = self._coerce_int(item.get("used"), 0)
+                remaining = max(0, quota - used)
+                if remaining < delta:
+                    return {
+                        "ok": False,
+                        "remaining": remaining,
+                        "unlimited": False,
+                        "reason": "额度不足，请联系管理员追加额度后再试",
+                    }
+                next_item = dict(item)
+                next_item["used"] = used + delta
+                self._items[index] = next_item
+                try:
+                    self._save()
+                except Exception:
+                    # 持久化失败时回滚内存，避免数字飘
+                    self._items[index] = item
+                    raise
+                return {
+                    "ok": True,
+                    "remaining": max(0, quota - next_item["used"]),
+                    "unlimited": False,
+                    "reason": "",
+                }
+        return {"ok": False, "remaining": 0, "unlimited": False, "reason": "密钥不存在"}
 
     def delete_key(self, key_id: str, *, role: AuthRole | None = None) -> bool:
         normalized_id = self._clean(key_id)

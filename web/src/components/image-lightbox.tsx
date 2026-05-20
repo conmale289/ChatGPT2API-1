@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
+import { Download, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -54,13 +54,13 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function getTouchDistance(touches: TouchList) {
+function getTouchDistance(touches: React.TouchList) {
   const first = touches[0];
   const second = touches[1];
   return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
 }
 
-function getTouchCenter(touches: TouchList) {
+function getTouchCenter(touches: React.TouchList) {
   const first = touches[0];
   const second = touches[1];
   return {
@@ -92,6 +92,8 @@ export function ImageLightbox({
 }: ImageLightboxProps) {
   const gestureRef = useRef<TouchGesture | null>(null);
   const lastTapRef = useRef(0);
+  const wheelLockRef = useRef(0);
+  const thumbRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const pendingTransformRef = useRef<ImageTransform | null>(null);
   const rafRef = useRef<number | null>(null);
   const [transform, setTransform] = useState<ImageTransform>({ scale: 1, x: 0, y: 0 });
@@ -177,6 +179,33 @@ export function ImageLightbox({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, goPrev, goNext]);
+
+  // 缩略图带：当前项滚动进可视区
+  useEffect(() => {
+    if (!open) return;
+    const node = thumbRefs.current[currentIndex];
+    if (node) {
+      node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [currentIndex, open]);
+
+  // 鼠标滚轮切换：缩放态下不接管，节流到每 ~280ms 一次，避免触摸板瞬间狂切
+  const handleWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      if (transform.scale > minScale) return;
+      const delta = Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      if (Math.abs(delta) < 8) return;
+      const now = Date.now();
+      if (now - wheelLockRef.current < 280) return;
+      wheelLockRef.current = now;
+      if (delta > 0) {
+        goNext();
+      } else {
+        goPrev();
+      }
+    },
+    [transform.scale, goPrev, goNext],
+  );
 
   const handleDownload = useCallback(() => {
     if (!current) return;
@@ -374,20 +403,44 @@ export function ImageLightbox({
             </DialogPrimitive.Close>
           </div>
 
-          {hasPrev && transform.scale <= minScale && (
-            <button
-              type="button"
-              onClick={goPrev}
-              className="absolute left-4 z-10 inline-flex size-10 items-center justify-center rounded-full bg-black/40 text-white/90 transition hover:bg-black/60"
-              aria-label="上一张"
+          {images.length > 1 && (
+            <div
+              className="hide-scrollbar absolute top-1/2 left-3 z-10 hidden max-h-[80vh] w-[88px] -translate-y-1/2 flex-col gap-2 overflow-y-auto rounded-2xl bg-black/40 p-2 shadow-lg backdrop-blur-sm sm:flex"
+              onClick={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
             >
-              <ChevronLeft className="size-5" />
-            </button>
+              {images.map((item, index) => (
+                <button
+                  key={item.id}
+                  ref={(node) => {
+                    thumbRefs.current[index] = node;
+                  }}
+                  type="button"
+                  onClick={() => onIndexChange(index)}
+                  className={cn(
+                    "relative aspect-square w-full shrink-0 cursor-pointer overflow-hidden rounded-lg border-2 transition",
+                    index === currentIndex
+                      ? "border-white/90"
+                      : "border-transparent opacity-70 hover:opacity-100",
+                  )}
+                  aria-label={`第 ${index + 1} 张`}
+                  aria-current={index === currentIndex}
+                >
+                  <img
+                    src={item.src}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    draggable={false}
+                  />
+                </button>
+              ))}
+            </div>
           )}
 
           <div
             className="flex h-full w-full touch-none items-center justify-center overflow-hidden"
             onClick={() => onOpenChange(false)}
+            onWheel={handleWheel}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
@@ -412,17 +465,6 @@ export function ImageLightbox({
               draggable={false}
             />
           </div>
-
-          {hasNext && transform.scale <= minScale && (
-            <button
-              type="button"
-              onClick={goNext}
-              className="absolute right-4 z-10 inline-flex size-10 items-center justify-center rounded-full bg-black/40 text-white/90 transition hover:bg-black/60"
-              aria-label="下一张"
-            >
-              <ChevronRight className="size-5" />
-            </button>
-          )}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

@@ -10,6 +10,7 @@ from typing import Any
 
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
+from services.image_owners_service import record_owner_for_result
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 
@@ -17,8 +18,16 @@ TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
 TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
-TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
+TASK_STATUS_CANCELED = "canceled"
+TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR, TASK_STATUS_CANCELED}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING}
+VALID_STATUSES = {
+    TASK_STATUS_QUEUED,
+    TASK_STATUS_RUNNING,
+    TASK_STATUS_SUCCESS,
+    TASK_STATUS_ERROR,
+    TASK_STATUS_CANCELED,
+}
 
 
 def _now_iso() -> str:
@@ -167,6 +176,36 @@ class ImageTaskService:
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
 
+    def cancel_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
+        """标记任务为已取消。
+
+        - queued: 直接置为 canceled，工作线程启动时会发现并跳过实际请求
+        - running: 置为 canceled，工作线程会在请求结束后丢弃结果而不写入
+        - 终态(success/error/canceled): 不动
+        """
+        owner = _owner_id(identity)
+        requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]
+        canceled: list[str] = []
+        skipped: list[str] = []
+        missing_ids: list[str] = []
+        with self._lock:
+            for task_id in requested_ids:
+                task = self._tasks.get(_task_key(owner, task_id))
+                if task is None:
+                    missing_ids.append(task_id)
+                    continue
+                status = task.get("status")
+                if status in TERMINAL_STATUSES:
+                    skipped.append(task_id)
+                    continue
+                task["status"] = TASK_STATUS_CANCELED
+                task["error"] = "已取消"
+                task["updated_at"] = _now_iso()
+                canceled.append(task_id)
+            if canceled:
+                self._save_locked()
+        return {"canceled": canceled, "skipped": skipped, "missing_ids": missing_ids}
+
     def _submit(
         self,
         identity: dict[str, object],
@@ -221,11 +260,22 @@ class ImageTaskService:
         identity: dict[str, object],
         model: str,
     ) -> None:
+        # 启动前检查：若任务已被取消，直接结束
+        with self._lock:
+            task = self._tasks.get(key)
+            if task is None or task.get("status") == TASK_STATUS_CANCELED:
+                return
+
         started = time.time()
         self._update_task(key, status=TASK_STATUS_RUNNING, error="")
         try:
             handler = self.edit_handler if mode == "edit" else self.generation_handler
             result = handler(payload)
+            # 请求结束后再检查：若期间被取消，丢弃结果不写回
+            with self._lock:
+                task = self._tasks.get(key)
+                if task is None or task.get("status") == TASK_STATUS_CANCELED:
+                    return
             if not isinstance(result, dict):
                 raise RuntimeError("image task returned streaming result unexpectedly")
             data = result.get("data")
@@ -233,6 +283,9 @@ class ImageTaskService:
                 message = _clean(result.get("message")) or "image task returned no image data"
                 raise RuntimeError(message)
             self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="")
+            # 任务真正成功后再写归属表，避免给失败的临时落盘也挂上 owner。
+            # admin / 匿名身份不写，由 record_owner_for_result 内部判断。
+            record_owner_for_result(identity, data)
             self._log_call(
                 identity,
                 mode,
@@ -243,6 +296,11 @@ class ImageTaskService:
                 urls=_collect_image_urls(data),
             )
         except Exception as exc:
+            # 请求异常时也要让"已取消"优先，不要把取消覆盖成 error
+            with self._lock:
+                task = self._tasks.get(key)
+                if task is not None and task.get("status") == TASK_STATUS_CANCELED:
+                    return
             error_message = str(exc) or "image task failed"
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
             self._log_call(
@@ -321,7 +379,7 @@ class ImageTaskService:
             if not task_id or not owner:
                 continue
             status = _clean(item.get("status"))
-            if status not in {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}:
+            if status not in VALID_STATUSES:
                 status = TASK_STATUS_ERROR
             task = {
                 "id": task_id,

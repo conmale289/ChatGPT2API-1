@@ -1,6 +1,14 @@
 "use client";
-import { ArrowUp, Check, ChevronDown, ImagePlus, LoaderCircle, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type RefObject } from "react";
+import { ArrowUp, Check, ChevronDown, CornerDownRight, ImagePlus, Infinity as InfinityIcon, LoaderCircle, X } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type RefObject,
+} from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,6 +26,11 @@ const SIZE_OPTIONS: SizeOption[] = [
   { value: "9:16", label: "9:16", desc: "竖版", w: 16, h: 28 },
 ];
 
+type ReplyTarget = {
+  sourcePrompt: string;
+  aiMessage: string;
+};
+
 type ImageComposerProps = {
   prompt: string;
   imageCount: string;
@@ -27,6 +40,8 @@ type ImageComposerProps = {
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
+  replyTarget?: ReplyTarget | null;
+  onCancelReply?: () => void;
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onImageSizeChange: (value: string) => void;
@@ -45,6 +60,8 @@ export function ImageComposer({
   referenceImages,
   textareaRef,
   fileInputRef,
+  replyTarget,
+  onCancelReply,
   onPromptChange,
   onImageCountChange,
   onImageSizeChange,
@@ -59,6 +76,8 @@ export function ImageComposer({
   const [sizeMenuPos, setSizeMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [isCountMenuOpen, setIsCountMenuOpen] = useState(false);
   const [countMenuPos, setCountMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
   const sizeMenuRef = useRef<HTMLDivElement>(null);
   const sizeMenuBtnRef = useRef<HTMLButtonElement>(null);
   const countMenuRef = useRef<HTMLDivElement>(null);
@@ -110,6 +129,64 @@ export function ImageComposer({
     void onReferenceImageChange(imageFiles);
   };
 
+  const hasImageItem = (event: DragEvent<HTMLDivElement>) => {
+    const items = event.dataTransfer?.items;
+    if (items && items.length > 0) {
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // Fallback：某些浏览器在 dragenter 阶段无法读 items.type，按 file 类型放行
+    return Array.from(event.dataTransfer?.types || []).includes("Files");
+  };
+
+  const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!hasImageItem(event)) {
+      return;
+    }
+    event.preventDefault();
+    dragCounterRef.current += 1;
+    setIsDraggingOver(true);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!hasImageItem(event)) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (dragCounterRef.current === 0) {
+      return;
+    }
+    event.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setIsDraggingOver(false);
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    dragCounterRef.current = 0;
+    setIsDraggingOver(false);
+    const imageFiles = Array.from(event.dataTransfer?.files || []).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (imageFiles.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    void onReferenceImageChange(imageFiles);
+  };
+
   return (
     <div className="shrink-0 flex justify-center px-1 sm:px-0">
       <div style={{ width: "min(980px, 100%)" }}>
@@ -124,7 +201,7 @@ export function ImageComposer({
           }}
         />
 
-        {referenceImages.length > 0 ? (
+        {referenceImages.length > 0 && !replyTarget ? (
           <div className="mb-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mb-3 sm:flex-wrap sm:overflow-visible sm:pb-0">
             {referenceImages.map((image, index) => (
               <div key={`${image.name}-${index}`} className="relative size-14 shrink-0 sm:size-16">
@@ -159,7 +236,16 @@ export function ImageComposer({
           </div>
         ) : null}
 
-        <div className="relative overflow-hidden rounded-[28px] bg-white shadow-[0_2px_4px_rgba(15,23,42,0.04),0_14px_24px_-6px_rgba(15,23,42,0.06),0_36px_56px_-16px_rgba(15,23,42,0.05),0_72px_96px_-32px_rgba(15,23,42,0.05)] sm:rounded-[32px]">
+        <div
+          className={cn(
+            "relative overflow-hidden rounded-[28px] bg-white shadow-[0_2px_4px_rgba(15,23,42,0.04),0_14px_24px_-6px_rgba(15,23,42,0.06),0_36px_56px_-16px_rgba(15,23,42,0.05),0_72px_96px_-32px_rgba(15,23,42,0.05)] transition sm:rounded-[32px]",
+            isDraggingOver && "ring-2 ring-stone-900/70 ring-offset-2 ring-offset-white",
+          )}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <div
             className="relative cursor-text"
             onClick={() => {
@@ -173,15 +259,49 @@ export function ImageComposer({
               onOpenChange={setLightboxOpen}
               onIndexChange={setLightboxIndex}
             />
+            {replyTarget ? (
+              <div
+                className="mx-3 mt-3 flex items-start gap-2 rounded-2xl border border-stone-200/80 bg-stone-50/80 px-3 py-2 sm:mx-5 sm:mt-4"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-stone-500 ring-1 ring-stone-200">
+                  <CornerDownRight className="size-3" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
+                    <span>正在回复 AI 的提问</span>
+                    <span className="text-stone-300">·</span>
+                    <span className="text-stone-400">无需粘贴原文，模型会自动收到上下文</span>
+                  </div>
+                  {replyTarget.aiMessage ? (
+                    <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-stone-600 sm:text-[13px]">
+                      {replyTarget.aiMessage}
+                    </p>
+                  ) : null}
+                </div>
+                {onCancelReply ? (
+                  <button
+                    type="button"
+                    onClick={onCancelReply}
+                    className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-200 hover:text-stone-700"
+                    aria-label="取消回复"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <Textarea
               ref={textareaRef}
               value={prompt}
               onChange={(event) => onPromptChange(event.target.value)}
               onPaste={handleTextareaPaste}
               placeholder={
-                referenceImages.length > 0
-                  ? "描述你希望如何修改参考图"
-                  : "输入你想要生成的画面，也可直接粘贴图片"
+                replyTarget
+                  ? "输入你的回答…"
+                  : referenceImages.length > 0
+                    ? "描述你希望如何修改参考图"
+                    : "输入你想要生成的画面，也可直接粘贴图片"
               }
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -206,12 +326,17 @@ export function ImageComposer({
                   </button>
                   <span className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-stone-100 px-3 text-[12px] font-medium text-stone-500 sm:h-10 sm:px-3.5 sm:text-[13px]">
                     <span className="hidden sm:inline">剩余</span>
-                    <span className="font-data tabular-nums text-stone-900">{availableQuota}</span>
+                    {availableQuota === "∞" ? (
+                      <InfinityIcon className="size-3.5 text-stone-900 sm:size-4" strokeWidth={2.25} aria-label="不限额度" />
+                    ) : (
+                      <span className="font-data tabular-nums text-stone-900">{availableQuota}</span>
+                    )}
                   </span>
                   {activeTaskCount > 0 && (
-                    <span className="flex shrink-0 items-center gap-1 font-data text-[11px] tabular-nums text-amber-600 sm:text-[12px]">
-                      <LoaderCircle className="size-3 animate-spin" />
-                      {activeTaskCount}<span className="hidden sm:inline"> 处理中</span>
+                    <span className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-3 text-[12px] font-medium text-amber-700 ring-1 ring-amber-100 sm:h-10 sm:px-3.5 sm:text-[13px]">
+                      <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.25} />
+                      <span className="font-data tabular-nums">{activeTaskCount}</span>
+                      <span className="hidden sm:inline">处理中</span>
                     </span>
                   )}
                   <div className="relative shrink-0">

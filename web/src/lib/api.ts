@@ -151,6 +151,17 @@ export type ManagedImage = {
   width?: number;
   height?: number;
   tags?: string[];
+  owner_id?: string;
+  // 后端在 list_images 里打的标记：true 表示该 owner_id 落在 admin 集合里。
+  // 前端用它把 badge 显示成"管理员"，避免暴露具体 admin 密钥 id。
+  is_admin_owner?: boolean;
+};
+
+export type ImageOwner = {
+  id: string;
+  name: string;
+  deleted: boolean;
+  count: number;
 };
 
 export type SystemLog = {
@@ -169,7 +180,7 @@ export type ImageResponse = {
 
 export type ImageTask = {
   id: string;
-  status: "queued" | "running" | "success" | "error";
+  status: "queued" | "running" | "success" | "error" | "canceled";
   mode: "generate" | "edit";
   model?: ImageModel;
   size?: string;
@@ -181,6 +192,12 @@ export type ImageTask = {
 
 type ImageTaskListResponse = {
   items: ImageTask[];
+  missing_ids: string[];
+};
+
+type ImageTaskCancelResponse = {
+  canceled: string[];
+  skipped: string[];
   missing_ids: string[];
 };
 
@@ -199,6 +216,20 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  quota: number;
+  used: number;
+  unlimited: boolean;
+  remaining: number | null;
+};
+
+export type AuthIdentity = {
+  id: string;
+  name: string;
+  role: AuthRole;
+  quota: number;
+  used: number;
+  unlimited: boolean;
+  remaining: number | null;
 };
 
 export type RegisterConfig = {
@@ -382,6 +413,13 @@ export async function fetchImageTasks(ids: string[]) {
   return httpRequest<ImageTaskListResponse>(`/api/image-tasks${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
+export async function cancelImageTasks(ids: string[]) {
+  return httpRequest<ImageTaskCancelResponse>("/api/image-tasks/cancel", {
+    method: "POST",
+    body: { ids },
+  });
+}
+
 export async function fetchSettingsConfig() {
   return httpRequest<{ config: SettingsConfig }>("/api/settings");
 }
@@ -430,16 +468,21 @@ export function getBackupDownloadUrl(key: string) {
   return `/api/backups/download?${params.toString()}`;
 }
 
-export async function fetchManagedImages(filters: { start_date?: string; end_date?: string }) {
+export async function fetchManagedImages(filters: { start_date?: string; end_date?: string; owner?: string }) {
   const params = new URLSearchParams();
   if (filters.start_date) params.set("start_date", filters.start_date);
   if (filters.end_date) params.set("end_date", filters.end_date);
+  if (filters.owner) params.set("owner", filters.owner);
   return httpRequest<{ items: ManagedImage[]; groups: Array<{ date: string; items: ManagedImage[] }> }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
   );
 }
 
-export async function deleteManagedImages(body: { paths?: string[]; start_date?: string; end_date?: string; all_matching?: boolean }) {
+export async function fetchImageOwners() {
+  return httpRequest<{ items: ImageOwner[] }>("/api/images/owners");
+}
+
+export async function deleteManagedImages(body: { paths?: string[]; start_date?: string; end_date?: string; owner?: string; all_matching?: boolean }) {
   return httpRequest<{ removed: number }>("/api/images/delete", { method: "POST", body });
 }
 
@@ -505,14 +548,32 @@ export async function fetchUserKeys() {
   return httpRequest<{ items: UserKey[] }>("/api/auth/users");
 }
 
-export async function createUserKey(name: string) {
+export async function fetchMyIdentity() {
+  return httpRequest<{ identity: AuthIdentity }>("/api/auth/me");
+}
+
+export async function createUserKey(payload: { name?: string; quota?: number; unlimited?: boolean }) {
   return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>("/api/auth/users", {
     method: "POST",
-    body: { name },
+    body: {
+      name: payload.name ?? "",
+      quota: Math.max(0, Number(payload.quota ?? 0) || 0),
+      unlimited: Boolean(payload.unlimited),
+    },
   });
 }
 
-export async function updateUserKey(keyId: string, updates: { enabled?: boolean; name?: string; key?: string }) {
+export async function updateUserKey(
+  keyId: string,
+  updates: {
+    enabled?: boolean;
+    name?: string;
+    key?: string;
+    quota?: number;
+    unlimited?: boolean;
+    reset_used?: boolean;
+  },
+) {
   return httpRequest<{ item: UserKey; items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "POST",
     body: updates,

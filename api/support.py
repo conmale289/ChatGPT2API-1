@@ -57,6 +57,19 @@ def raise_image_quota_error(exc: Exception) -> None:
     raise HTTPException(status_code=502, detail={"error": message}) from exc
 
 
+def consume_user_quota(identity: dict[str, object], amount: int) -> None:
+    """画图入口处扣减用户密钥额度。admin / unlimited 直接放行；
+    普通用户额度不足直接 402，让前端把按钮禁用并提示联系管理员加额度。"""
+    role = str(identity.get("role") or "").strip().lower()
+    item_id = str(identity.get("id") or "").strip()
+    if role == "admin" or not item_id or item_id == "admin":
+        return
+    result = auth_service.consume_quota(item_id, max(1, int(amount or 1)))
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "额度不足")
+        raise HTTPException(status_code=402, detail={"error": reason})
+
+
 def sanitize_cpa_pool(pool: dict | None) -> dict | None:
     if not isinstance(pool, dict):
         return None

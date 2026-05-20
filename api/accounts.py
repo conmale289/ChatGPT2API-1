@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -8,6 +8,7 @@ from services.auth_service import auth_service
 
 from api.support import (
     require_admin,
+    require_identity,
     sanitize_cpa_pool,
     sanitize_cpa_pools,
     sanitize_sub2api_server,
@@ -26,12 +27,17 @@ from services.sub2api_service import (
 
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
+    quota: int = 0
+    unlimited: bool = False
 
 
 class UserKeyUpdateRequest(BaseModel):
     name: str | None = None
     enabled: bool | None = None
     key: str | None = None
+    quota: int | None = None
+    unlimited: bool | None = None
+    reset_used: bool | None = None
 
 
 class AccountCreateRequest(BaseModel):
@@ -99,11 +105,41 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return {"items": auth_service.list_keys(role="user")}
 
+    @router.get("/api/auth/me")
+    async def get_my_identity(response: Response, authorization: str | None = Header(default=None)):
+        # 余额会随每次画图动态变化，不能让浏览器/SPA 兜底 HTML 缓存住，
+        # 否则前端永远显示老值。明确禁止任何中间层缓存。
+        response.headers["Cache-Control"] = "no-store"
+        identity = require_identity(authorization)
+        # admin 走 _legacy_admin_identity 不走 auth_service，没 id；前端按 unlimited=True 处理。
+        item_id = str(identity.get("id") or "").strip()
+        if not item_id or item_id == "admin":
+            return {
+                "identity": {
+                    "id": item_id,
+                    "name": identity.get("name"),
+                    "role": identity.get("role"),
+                    "quota": 0,
+                    "used": 0,
+                    "unlimited": True,
+                    "remaining": None,
+                }
+            }
+        record = auth_service.get_by_id(item_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail={"error": "用户不存在"})
+        return {"identity": record}
+
     @router.post("/api/auth/users")
     async def create_user_key(body: UserKeyCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         try:
-            item, raw_key = auth_service.create_key(role="user", name=body.name)
+            item, raw_key = auth_service.create_key(
+                role="user",
+                name=body.name,
+                quota=max(0, int(body.quota or 0)),
+                unlimited=bool(body.unlimited),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
@@ -121,6 +157,9 @@ def create_router() -> APIRouter:
                 "name": body.name,
                 "enabled": body.enabled,
                 "key": body.key,
+                "quota": body.quota,
+                "unlimited": body.unlimited,
+                "reset_used": body.reset_used,
             }.items()
             if value is not None
         }

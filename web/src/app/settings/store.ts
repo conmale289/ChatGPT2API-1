@@ -108,6 +108,28 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
   };
 }
 
+// 测试连接 / 立即备份前的本地必填校验：必须先有 R2 四要素 + bucket，
+// 否则别走 saveConfig，免得后端 200 返回触发"配置已保存"成功 toast，
+// 紧接着实际操作再报错，UI 同时冒两条互相打架的提示。
+function collectMissingBackupFields(backup: BackupSettings | undefined | null): string | null {
+  if (!backup) {
+    return "R2 备份配置";
+  }
+  const required: Array<{ key: keyof BackupSettings; label: string }> = [
+    { key: "account_id", label: "Cloudflare Account ID" },
+    { key: "access_key_id", label: "Access Key ID" },
+    { key: "secret_access_key", label: "Secret Access Key" },
+    { key: "bucket", label: "Bucket 名称" },
+  ];
+  const missing = required
+    .filter((item) => !String(backup[item.key] ?? "").trim())
+    .map((item) => item.label);
+  if (missing.length === 0) {
+    return null;
+  }
+  return missing.join("、");
+}
+
 function normalizeFiles(items: CPARemoteFile[]) {
   const seen = new Set<string>();
   const files: CPARemoteFile[] = [];
@@ -497,6 +519,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   runBackup: async () => {
+    const missing = collectMissingBackupFields(get().config?.backup);
+    if (missing) {
+      toast.error(`请先填写${missing}`);
+      return;
+    }
     set({ isRunningBackup: true });
     try {
       const saved = await get().saveConfig();
@@ -527,6 +554,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   testBackup: async () => {
+    const missing = collectMissingBackupFields(get().config?.backup);
+    if (missing) {
+      toast.error(`请先填写${missing}`);
+      return;
+    }
     set({ isTestingBackup: true });
     try {
       const saved = await get().saveConfig();

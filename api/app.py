@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from threading import Event
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +38,17 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 动态接口禁缓存：/api/* 与 /v1/* 都是后端业务数据，浏览器若自行启发式缓存
+    # 会出现"改了配置/数据但 UI 不更新"的诡异现象。一律 no-store 让每次都打到后端。
+    @app.middleware("http")
+    async def _no_store_for_api(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/api/") or path.startswith("/v1/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     app.include_router(ai.create_router())
     app.include_router(accounts.create_router())
     app.include_router(image_tasks.create_router())

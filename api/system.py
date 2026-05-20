@@ -8,12 +8,42 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from api.support import require_admin, require_identity, resolve_image_base_url
+from services.auth_service import auth_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
-from services.image_service import delete_images, download_images_zip, get_image_download_response, get_thumbnail_response, list_images
+from services.image_owners_service import owner_counts
+from services.image_service import count_total_images, delete_images, download_images_zip, get_image_download_response, get_thumbnail_response, list_images
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import test_proxy
+
+
+def _admin_owner_ids() -> set[str]:
+    """收集所有可能落在 image_owners.json 里的 admin id：
+    - "admin"：旧 auth_key（CHATGPT2API_AUTH_KEY / config.json.auth-key）的固定 id
+    - 其余：通过 auth_service 创建的 admin 角色密钥
+    用来把"管理员生成"和"真孤儿"两个桶区分开，别再混在一起。
+    """
+    ids: set[str] = {"admin"}
+    for item in auth_service.list_keys(role="admin"):
+        uid = str(item.get("id") or "").strip()
+        if uid:
+            ids.add(uid)
+    return ids
+
+
+def _admin_owner_ids() -> set[str]:
+    """收集所有可能落在 image_owners.json 里的 admin id：
+    - "admin"：旧 auth_key（CHATGPT2API_AUTH_KEY / config.json.auth-key）的固定 id
+    - 其余：通过 auth_service 创建的 admin 角色密钥
+    用来把"管理员生成"和"真孤儿"两个桶区分开，别再混在一起。
+    """
+    ids: set[str] = {"admin"}
+    for item in auth_service.list_keys(role="admin"):
+        uid = str(item.get("id") or "").strip()
+        if uid:
+            ids.add(uid)
+    return ids
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -28,6 +58,7 @@ class ImageDeleteRequest(BaseModel):
     paths: list[str] = []
     start_date: str = ""
     end_date: str = ""
+    owner: str = ""
     all_matching: bool = False
 
 class ImageDownloadRequest(BaseModel):
@@ -72,9 +103,68 @@ def create_router(app_version: str) -> APIRouter:
         return {"config": config.update(body.model_dump(mode="python"))}
 
     @router.get("/api/images")
-    async def get_images(request: Request, start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
+    async def get_images(
+        request: Request,
+        start_date: str = "",
+        end_date: str = "",
+        owner: str = "",
+        authorization: str | None = Header(default=None),
+    ):
         require_admin(authorization)
-        return list_images(resolve_image_base_url(request), start_date=start_date.strip(), end_date=end_date.strip())
+        return list_images(
+            resolve_image_base_url(request),
+            start_date=start_date.strip(),
+            end_date=end_date.strip(),
+            owner=owner.strip(),
+            admin_ids=_admin_owner_ids(),
+        )
+
+    @router.get("/api/images/owners")
+    async def get_image_owners(authorization: str | None = Header(default=None)):
+        """图片管理页用户筛选下拉的数据源。
+        三类语义，互不混淆：
+        1. 普通用户：列出所有用户密钥（即便 count=0），admin 期望"我建过的密钥都能筛"
+        2. 管理员（__admin__）：所有 admin 角色（含旧 auth_key 的 "admin" id）生成的图聚合
+        3. 未归属（__unowned__）：image_owners.json 里没记录的真孤儿，多半是老数据
+        孤儿 user id（用户密钥已被删但归属表还留着）单列出来，标记 deleted=true。
+        """
+        require_admin(authorization)
+        counts = owner_counts()
+        admin_ids = _admin_owner_ids()
+        users = auth_service.list_keys(role="user")
+        items: list[dict[str, object]] = []
+        seen_ids: set[str] = set()
+        for user in users:
+            uid = str(user.get("id") or "").strip()
+            if not uid:
+                continue
+            seen_ids.add(uid)
+            items.append({
+                "id": uid,
+                "name": user.get("name") or uid,
+                "deleted": False,
+                "count": int(counts.get(uid, 0)),
+            })
+        # admin 集合本身已经独立成一桶，所以 seen_ids 里要带上 admin_ids 防止重复
+        seen_ids |= admin_ids
+        admin_count = sum(int(c) for k, c in counts.items() if k in admin_ids)
+        for owner_id, count in counts.items():
+            if not owner_id or owner_id in seen_ids:
+                continue
+            items.append({
+                "id": owner_id,
+                "name": owner_id,
+                "deleted": True,
+                "count": int(count),
+            })
+        items.sort(key=lambda x: (-int(x.get("count") or 0), str(x.get("name") or "")))
+        # 真孤儿 = 总图片数 − 已挂归属的所有图（含 admin / 用户 / 已删用户）
+        owned_total = sum(int(v) for v in counts.values())
+        unowned_count = max(0, count_total_images() - owned_total)
+        # 两个固定桶；前端会把它们置顶到列表最上方。
+        items.append({"id": "__admin__", "name": "管理员", "deleted": False, "count": admin_count})
+        items.append({"id": "__unowned__", "name": "未归属", "deleted": False, "count": unowned_count})
+        return {"items": items}
 
     @router.get("/image-thumbnails/{image_path:path}", include_in_schema=False)
     async def get_image_thumbnail(image_path: str):
@@ -83,7 +173,14 @@ def create_router(app_version: str) -> APIRouter:
     @router.post("/api/images/delete")
     async def delete_images_endpoint(body: ImageDeleteRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return delete_images(body.paths, start_date=body.start_date.strip(), end_date=body.end_date.strip(), all_matching=body.all_matching)
+        return delete_images(
+            body.paths,
+            start_date=body.start_date.strip(),
+            end_date=body.end_date.strip(),
+            owner=body.owner.strip(),
+            all_matching=body.all_matching,
+            admin_ids=_admin_owner_ids(),
+        )
 
     @router.post("/api/images/download")
     async def download_images_endpoint(body: ImageDownloadRequest, authorization: str | None = Header(default=None)):

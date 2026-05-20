@@ -4,8 +4,9 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.support import require_identity, resolve_image_base_url
+from api.support import consume_user_quota, require_identity, resolve_image_base_url
 from services.content_filter import check_request, request_text
+from services.image_owners_service import record_owner_for_result
 from services.log_service import LoggedCall
 from services.protocol import (
     anthropic_v1_messages,
@@ -80,11 +81,17 @@ def create_router() -> APIRouter:
             authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        # /v1 入口按 n 整体扣，1 次提交 = n 张。失败直接 402，不进 call.run。
+        consume_user_quota(identity, max(1, int(body.n or 1)))
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
-        return await call.run(openai_v1_image_generations.handle, payload)
+        result = await call.run(openai_v1_image_generations.handle, payload)
+        # 对接 dict 返回时把图片归属也写一下；StreamingResponse 不动。
+        if isinstance(result, dict):
+            record_owner_for_result(identity, result.get("data"))
+        return result
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -103,6 +110,8 @@ def create_router() -> APIRouter:
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+        # 同样按 n 整体扣，校验过 n 范围之后再扣，避免无效请求也被记账。
+        consume_user_quota(identity, max(1, int(n)))
         await filter_or_log(call, prompt)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
@@ -123,7 +132,10 @@ def create_router() -> APIRouter:
             "stream": stream,
             "base_url": resolve_image_base_url(request),
         }
-        return await call.run(openai_v1_image_edit.handle, payload)
+        result = await call.run(openai_v1_image_edit.handle, payload)
+        if isinstance(result, dict):
+            record_owner_for_result(identity, result.get("data"))
+        return result
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { History, LoaderCircle, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { History, Infinity as InfinityIcon, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
@@ -20,8 +20,10 @@ import { Button } from "@/components/ui/button";
 import {
   createImageEditTask,
   createImageGenerationTask,
+  cancelImageTasks,
   fetchAccounts,
   fetchImageTasks,
+  fetchMyIdentity,
   type Account,
   type ImageTask,
 } from "@/lib/api";
@@ -45,6 +47,9 @@ import {
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
+// 每个会话的滚动位置单独存。用 sessionStorage 因为这就是"会话级"的临时位置，
+// 关浏览器后从底部重看更自然；要跨浏览器会话保留改成 localStorage 即可。
+const SCROLL_POSITION_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 
 function clampImageCount(value: string) {
   return String(Math.min(100, Math.max(1, Math.floor(Number(value) || 1))));
@@ -179,6 +184,15 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
     };
   }
 
+  if (task.status === "canceled") {
+    return {
+      ...image,
+      taskId: task.id,
+      status: "error",
+      error: task.error || "已取消",
+    };
+  }
+
   return {
     ...image,
     taskId: task.id,
@@ -200,6 +214,35 @@ function pickFallbackConversationId(conversations: ImageConversation[]) {
 
 function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function collectLoadingTaskIds(conversation: ImageConversation): string[] {
+  const ids: string[] = [];
+  for (const turn of conversation.turns) {
+    if (turn.resultsDeleted) continue;
+    for (const image of turn.images) {
+      if (image.status === "loading" && image.taskId) {
+        ids.push(image.taskId);
+      }
+    }
+  }
+  return ids;
+}
+
+function collectTurnLoadingTaskIds(turn: ImageTurn): string[] {
+  if (turn.resultsDeleted) return [];
+  return turn.images.flatMap((image) =>
+    image.status === "loading" && image.taskId ? [image.taskId] : [],
+  );
+}
+
+async function cancelTaskIdsSilently(ids: string[]) {
+  if (ids.length === 0) return;
+  try {
+    await cancelImageTasks(ids);
+  } catch {
+    // 取消失败不阻塞 UI 删除流程；后端任务会按重试/超时自然终止
+  }
 }
 
 function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> {
@@ -344,6 +387,12 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const resultsViewportRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 滚动位置：每个会话独立记一份，刷新/切页都能落回上次位置
+  const scrollPositionsRef = useRef<Record<string, number>>({});
+  const restoredConversationIdRef = useRef<string | null>(null);
+  const lastTurnCountRef = useRef<number>(0);
+  const lastActiveCountRef = useRef<number>(0);
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
@@ -358,6 +407,17 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  // 底部渐隐条只在"内容超出视口且没滚到底"时显示——
+  // 没有内容、刚好填满、或者已经滚到底，都不应该看到那块灰雾。
+  const [showBottomFade, setShowBottomFade] = useState(false);
+  // 当用户在错误卡片上点击"回复"时记录的上下文，仅 UI 展示 + 提交时拼装 API prompt 用，
+  // 不会进入 turn.prompt 也不会进入聊天可见列表，所以用户视野里永远只有自己说过的话。
+  const [replyTarget, setReplyTarget] = useState<{
+    conversationId: string;
+    sourceTurnId: string;
+    sourcePrompt: string;
+    aiMessage: string;
+  } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<
     | { type: "one"; id: string }
     | { type: "prompt"; conversationId: string; turnId: string }
@@ -367,6 +427,27 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   >(null);
 
   const parsedCount = useMemo(() => Number(clampImageCount(imageCount)), [imageCount]);
+  // 提交前的乐观额度检查：拦掉那些"已发送对话"成功 toast 后又紧跟着 "额度不足" 错误 toast 的双弹。
+  // 管理员/不限额度/没拿到额度数据时一律放行，让后端兜底。
+  const ensureQuotaForRequest = useCallback(
+    (count: number) => {
+      if (isAdmin) return true;
+      if (availableQuota === "∞") return true;
+      if (availableQuota === "加载中..." || availableQuota === "--") return true;
+      const remaining = Number(availableQuota);
+      if (!Number.isFinite(remaining)) return true;
+      if (remaining <= 0) {
+        toast.error("额度不足，请联系管理员追加额度后再试");
+        return false;
+      }
+      if (remaining < count) {
+        toast.error(`剩余额度仅 ${remaining}，无法生成 ${count} 张`);
+        return false;
+      }
+      return true;
+    },
+    [availableQuota, isAdmin],
+  );
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
@@ -414,6 +495,25 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setImageSize(storedSize || "");
         setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
+        // 滚动位置表只在浏览器侧、首次进入时加载一次
+        if (typeof window !== "undefined") {
+          try {
+            const raw = window.sessionStorage.getItem(SCROLL_POSITION_STORAGE_KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === "object") {
+                scrollPositionsRef.current = Object.fromEntries(
+                  Object.entries(parsed as Record<string, unknown>).filter(
+                    ([, value]) => typeof value === "number" && Number.isFinite(value),
+                  ),
+                ) as Record<string, number>;
+              }
+            }
+          } catch {
+            // 解析失败就当作没有
+          }
+        }
+
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
         if (cancelled) {
@@ -455,13 +555,25 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   const loadQuota = useCallback(async () => {
-    if (!isAdmin) {
-      setAvailableQuota("--");
+    if (isAdmin) {
+      // 管理员：显示账号池里所有正常账号的剩余额度合计。
+      try {
+        const data = await fetchAccounts();
+        setAvailableQuota(formatAvailableQuota(data.items));
+      } catch {
+        setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
+      }
       return;
     }
+    // 普通用户：显示自己密钥的剩余额度（unlimited 时显示 ∞）。
     try {
-      const data = await fetchAccounts();
-      setAvailableQuota(formatAvailableQuota(data.items));
+      const { identity } = await fetchMyIdentity();
+      if (identity.unlimited) {
+        setAvailableQuota("∞");
+      } else {
+        const remaining = identity.remaining ?? Math.max(0, identity.quota - identity.used);
+        setAvailableQuota(String(remaining));
+      }
     } catch {
       setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
     }
@@ -484,16 +596,86 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     };
   }, [isAdmin, loadQuota]);
 
-  useEffect(() => {
-    if (!selectedConversation) {
+  // 滚动行为：
+  // 1) 切换/打开会话首帧 → 同步落到上次记忆的 scrollTop（落不到就到底，无动画）
+  // 2) 用户提交新一轮（turns.length 增加）或本轮生成完成（活跃数从 >0 → 0）→ smooth 滚到底
+  // 3) 其他时候（图片状态在轮询、对话内容微调）不再强制滚动，用户可以正常向上看历史
+  useLayoutEffect(() => {
+    const viewport = resultsViewportRef.current;
+    if (!viewport) {
       return;
     }
 
-    resultsViewportRef.current?.scrollTo({
-      top: resultsViewportRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [selectedConversation?.updatedAt, selectedConversation?.turns.length, selectedConversation]);
+    // 进入"空状态"（点新建 / 删完对话）：把上一会话残留的 scrollTop 清掉，
+    // 否则 h-full 的 aurora 视觉中心会被之前的滚动位置顶上去。
+    if (!selectedConversation) {
+      viewport.scrollTo({ top: 0, behavior: "auto" });
+      restoredConversationIdRef.current = null;
+      lastTurnCountRef.current = 0;
+      lastActiveCountRef.current = 0;
+      setShowBottomFade(false);
+      return;
+    }
+
+    const conversationId = selectedConversation.id;
+    const turnsLength = selectedConversation.turns.length;
+    const stats = getImageConversationStats(selectedConversation);
+    const activeCount = stats.queued + stats.running;
+
+    // 第一次看到这个会话：恢复滚动位置
+    if (restoredConversationIdRef.current !== conversationId) {
+      restoredConversationIdRef.current = conversationId;
+      const savedTop = scrollPositionsRef.current[conversationId];
+      if (typeof savedTop === "number" && Number.isFinite(savedTop)) {
+        // 内容此时可能还没完全 layout 出来，先 jump 一次再下一帧补一次
+        viewport.scrollTo({ top: savedTop, behavior: "auto" });
+        requestAnimationFrame(() => {
+          viewport.scrollTo({ top: savedTop, behavior: "auto" });
+        });
+      } else {
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" });
+      }
+      lastTurnCountRef.current = turnsLength;
+      lastActiveCountRef.current = activeCount;
+      return;
+    }
+
+    const turnAdded = turnsLength > lastTurnCountRef.current;
+    const finishedGenerating = lastActiveCountRef.current > 0 && activeCount === 0;
+
+    if (turnAdded || finishedGenerating) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+    }
+
+    // 内容变化时同步重算渐隐：滚动事件不会因 turn 增减自动触发，
+    // 必须在 layout 阶段亲自量一次，否则新增内容被 composer 遮住时灰雾不会出现。
+    const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    setShowBottomFade(remaining > 8);
+
+    lastTurnCountRef.current = turnsLength;
+    lastActiveCountRef.current = activeCount;
+  }, [selectedConversation]);
+
+  // 切走会话时立即把当前滚动位置落盘，避免下次回来还没来得及保存
+  useEffect(() => {
+    return () => {
+      const viewport = resultsViewportRef.current;
+      const conversationId = restoredConversationIdRef.current;
+      if (viewport && conversationId) {
+        scrollPositionsRef.current[conversationId] = viewport.scrollTop;
+        if (typeof window !== "undefined") {
+          try {
+            window.sessionStorage.setItem(
+              SCROLL_POSITION_STORAGE_KEY,
+              JSON.stringify(scrollPositionsRef.current),
+            );
+          } catch {
+            // 容量满或被禁用时静默
+          }
+        }
+      }
+    };
+  }, [selectedConversationId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -553,6 +735,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       options: { persist?: boolean } = {},
     ) => {
       const current = conversationsRef.current.find((item) => item.id === conversationId) ?? null;
+      if (!current) {
+        // 对话已被删除（或从未存在），不再写回，避免轮询任务"复活"已删数据
+        return;
+      }
       const nextConversation = updater(current);
       const nextConversations = sortImageConversations([
         nextConversation,
@@ -571,6 +757,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     setImagePrompt("");
     setReferenceImageFiles([]);
     setReferenceImages([]);
+    setReplyTarget(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -587,6 +774,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const handleDeleteConversation = async (id: string) => {
+    const target = conversationsRef.current.find((item) => item.id === id);
+    const taskIdsToCancel = target ? collectLoadingTaskIds(target) : [];
+
     const nextConversations = conversations.filter((item) => item.id !== id);
     conversationsRef.current = nextConversations;
     setConversations(nextConversations);
@@ -594,6 +784,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       setSelectedConversationId(pickFallbackConversationId(nextConversations));
       resetComposer();
     }
+
+    void cancelTaskIdsSilently(taskIdsToCancel);
 
     try {
       await deleteImageConversation(id);
@@ -611,6 +803,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     if (!conversation) {
       return;
     }
+
+    const taskIdsToCancel =
+      part === "results"
+        ? collectTurnLoadingTaskIds(conversation.turns.find((turn) => turn.id === turnId) ?? ({ images: [] } as unknown as ImageTurn))
+        : [];
 
     const turns = conversation.turns
       .map((turn) => {
@@ -632,6 +829,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       })
       .filter((turn): turn is ImageTurn => Boolean(turn));
 
+    void cancelTaskIdsSilently(taskIdsToCancel);
+
     if (turns.length === 0) {
       await handleDeleteConversation(conversationId);
       return;
@@ -646,12 +845,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const handleClearHistory = async () => {
+    const taskIdsToCancel = conversationsRef.current.flatMap(collectLoadingTaskIds);
+
     try {
       await clearImageConversations();
       conversationsRef.current = [];
       setConversations([]);
       setSelectedConversationId(null);
       resetComposer();
+      void cancelTaskIdsSilently(taskIdsToCancel);
       toast.success("已清空历史记录");
     } catch (error) {
       const message = error instanceof Error ? error.message : "清空历史记录失败";
@@ -784,6 +986,44 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     [],
   );
 
+  // 模型反问/拒绝时点"回复"。把 AI 反问 + 上一轮 prompt 都收纳进 replyTarget，
+  // 但不动输入框文本——用户写入框里的永远是他自己说的话。
+  // 提交时由 handleSubmit / runConversationQueue 把这份上下文偷偷拼进发给模型的 prompt。
+  const handleReplyToTurn = useCallback((conversationId: string, turnId: string, aiMessage: string) => {
+    const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+    const sourceTurn = conversation?.turns.find((turn) => turn.id === turnId);
+    if (!conversation || !sourceTurn) {
+      return;
+    }
+
+    setSelectedConversationId(conversationId);
+    setReplyTarget({
+      conversationId,
+      sourceTurnId: turnId,
+      sourcePrompt: sourceTurn.prompt,
+      aiMessage,
+    });
+
+    // 把当前轮的参考图也带过来，否则模型回答的将是空气。
+    if (sourceTurn.referenceImages.length > 0) {
+      setReferenceImages(sourceTurn.referenceImages);
+      setReferenceImageFiles(
+        sourceTurn.referenceImages.map((image) => dataUrlToFile(image.dataUrl, image.name, image.type)),
+      );
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      const length = textarea.value.length;
+      textarea.setSelectionRange(length, length);
+    });
+  }, []);
+
   const handleReuseTurnConfig = useCallback(async (conversationId: string, turnId: string) => {
     const conversation = conversationsRef.current.find((item) => item.id === conversationId);
     const turn = conversation?.turns.find((item) => item.id === turnId);
@@ -900,13 +1140,31 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           throw new Error("未找到可用于继续编辑的参考图");
         }
 
+        // 用户视野里 turn.prompt 永远只有自己说过的话；
+        // 但调用模型时要把上一轮 prompt + AI 反问拼回去，让模型有上下文判断如何作画。
+        const apiPrompt = (() => {
+          const ctx = activeTurn.replyContext;
+          if (!ctx) {
+            return activeTurn.prompt;
+          }
+          const lines: string[] = [];
+          if (ctx.sourcePrompt.trim()) {
+            lines.push(`[上一轮我的请求] ${ctx.sourcePrompt.trim()}`);
+          }
+          if (ctx.aiMessage.trim()) {
+            lines.push(`[你上一轮的反问] ${ctx.aiMessage.trim()}`);
+          }
+          lines.push(`[我的回答] ${activeTurn.prompt}`);
+          return lines.join("\n");
+        })();
+
         const pendingImages = activeTurn.images.filter((image) => image.status === "loading");
         const submitted = await Promise.all(
           pendingImages.map((image) => {
             const taskId = image.taskId || image.id;
             return activeTurn.mode === "edit"
-              ? createImageEditTask(taskId, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size)
-              : createImageGenerationTask(taskId, activeTurn.prompt, activeTurn.model, activeTurn.size);
+              ? createImageEditTask(taskId, referenceFiles, apiPrompt, activeTurn.model, activeTurn.size)
+              : createImageGenerationTask(taskId, apiPrompt, activeTurn.model, activeTurn.size);
           }),
         );
         await applyTasks(submitted);
@@ -934,8 +1192,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             const resubmitted = await Promise.all(
               missingImages.map((image) =>
                 activeTurn.mode === "edit"
-                  ? createImageEditTask(image.taskId || image.id, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size)
-                  : createImageGenerationTask(image.taskId || image.id, activeTurn.prompt, activeTurn.model, activeTurn.size),
+                  ? createImageEditTask(image.taskId || image.id, referenceFiles, apiPrompt, activeTurn.model, activeTurn.size)
+                  : createImageGenerationTask(image.taskId || image.id, apiPrompt, activeTurn.model, activeTurn.size),
               ),
             );
             if (resubmitted.length > 0) {
@@ -995,9 +1253,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         return;
       }
 
+      const count = Math.max(1, sourceTurn.count || sourceTurn.images.length || 1);
+      if (!ensureQuotaForRequest(count)) {
+        return;
+      }
+
       const now = new Date().toISOString();
       const nextTurnId = createId();
-      const count = Math.max(1, sourceTurn.count || sourceTurn.images.length || 1);
       const nextTurn: ImageTurn = {
         id: nextTurnId,
         prompt: sourceTurn.prompt,
@@ -1009,6 +1271,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         images: createLoadingImages(nextTurnId, count),
         createdAt: now,
         status: "queued",
+        // 重新生成时保留原 turn 的回复上下文，否则模型会丢失上一轮的对话语境。
+        replyContext: sourceTurn.replyContext,
       };
       const nextConversation = {
         ...conversation,
@@ -1021,13 +1285,17 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       void runConversationQueue(conversationId);
       toast.success("已加入重新生成队列");
     },
-    [runConversationQueue],
+    [ensureQuotaForRequest, runConversationQueue],
   );
 
   const handleRetryImage = useCallback(
     async (conversationId: string, turnId: string, imageId: string) => {
       const conversation = conversationsRef.current.find((item) => item.id === conversationId);
       if (!conversation) {
+        return;
+      }
+
+      if (!ensureQuotaForRequest(1)) {
         return;
       }
 
@@ -1066,7 +1334,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       await persistConversation(nextConversation);
       void runConversationQueue(conversationId);
     },
-    [runConversationQueue],
+    [ensureQuotaForRequest, runConversationQueue],
   );
 
   useEffect(() => {
@@ -1092,6 +1360,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       return;
     }
 
+    if (!ensureQuotaForRequest(parsedCount)) {
+      return;
+    }
+
     const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
 
     const targetConversation = selectedConversationId
@@ -1100,6 +1372,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const now = new Date().toISOString();
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
+    // 仅当回复目标属于当前对话时才挂上下文，避免切换对话后 replyTarget 漏带。
+    const activeReplyContext =
+      replyTarget && replyTarget.conversationId === conversationId
+        ? {
+            sourceTurnId: replyTarget.sourceTurnId,
+            sourcePrompt: replyTarget.sourcePrompt,
+            aiMessage: replyTarget.aiMessage,
+          }
+        : undefined;
     const draftTurn: ImageTurn = {
       id: turnId,
       prompt,
@@ -1111,6 +1392,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       images: createLoadingImages(turnId, parsedCount),
       createdAt: now,
       status: "queued",
+      replyContext: activeReplyContext,
     };
 
     const baseConversation: ImageConversation = targetConversation
@@ -1179,7 +1461,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           <div className="pointer-events-auto ml-auto flex items-center gap-2">
             <span className="hidden items-center gap-1.5 rounded-md border border-border bg-card/90 px-2 py-1 shadow-[0_4px_16px_-6px_rgba(15,23,42,0.18)] backdrop-blur sm:inline-flex">
               <span className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">额度</span>
-              <span className="font-data tabular-nums text-[12px] font-semibold text-foreground">{availableQuota}</span>
+              {availableQuota === "∞" ? (
+                <InfinityIcon className="size-3.5 text-foreground" strokeWidth={2.25} aria-label="不限额度" />
+              ) : (
+                <span className="font-data tabular-nums text-[12px] font-semibold text-foreground">{availableQuota}</span>
+              )}
             </span>
             <span className="hidden items-center gap-1.5 rounded-md border border-border bg-card/90 px-2 py-1 shadow-[0_4px_16px_-6px_rgba(15,23,42,0.18)] backdrop-blur sm:inline-flex">
               <span className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">运行</span>
@@ -1226,23 +1512,54 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
           <div
             ref={resultsViewportRef}
-            className={`hide-scrollbar min-h-0 flex-1 overscroll-contain px-1 pt-14 pb-2 sm:px-4 sm:pt-16 sm:pb-4 ${selectedConversation ? "overflow-y-auto" : "overflow-hidden"}`}
+            onScroll={(event) => {
+              const target = event.currentTarget;
+              // 同步底部渐隐：剩余可滚距离大于一行高度时才显示，
+              // 滚到底/没溢出都让它消失，避免无内容时灰雾常驻。
+              const remaining = target.scrollHeight - target.scrollTop - target.clientHeight;
+              setShowBottomFade(remaining > 8);
+              const conversationId = restoredConversationIdRef.current;
+              if (!conversationId) return;
+              scrollPositionsRef.current[conversationId] = target.scrollTop;
+              if (scrollSaveTimerRef.current) {
+                clearTimeout(scrollSaveTimerRef.current);
+              }
+              scrollSaveTimerRef.current = setTimeout(() => {
+                if (typeof window === "undefined") return;
+                try {
+                  window.sessionStorage.setItem(
+                    SCROLL_POSITION_STORAGE_KEY,
+                    JSON.stringify(scrollPositionsRef.current),
+                  );
+                } catch {
+                  // 容量满或被禁用时静默
+                }
+              }, 200);
+            }}
+            className={`hide-scrollbar min-h-0 flex-1 overscroll-contain px-1 pt-14 pb-6 sm:px-4 sm:pt-16 sm:pb-8 ${selectedConversation ? "overflow-y-auto" : "overflow-hidden"}`}
           >
-            <ImageResults
-              selectedConversation={selectedConversation}
-              onOpenLightbox={openLightbox}
-              onContinueEdit={handleContinueEdit}
-              onDeletePrompt={openDeletePromptConfirm}
-              onDeleteResults={openDeleteResultsConfirm}
-              onReuseTurnConfig={handleReuseTurnConfig}
-              onRegenerateTurn={handleRegenerateTurn}
-              onRetryImage={handleRetryImage}
-              formatConversationTime={formatConversationTime}
-            />
+            {isLoadingHistory ? (
+              // 历史加载完成前先占位，避免 selectedConversation === null 触发的"空状态"
+              // aurora 大屏闪现一下又跳走的视觉抖动。
+              <div aria-hidden className="h-full" />
+            ) : (
+              <ImageResults
+                selectedConversation={selectedConversation}
+                onOpenLightbox={openLightbox}
+                onContinueEdit={handleContinueEdit}
+                onDeletePrompt={openDeletePromptConfirm}
+                onDeleteResults={openDeleteResultsConfirm}
+                onReuseTurnConfig={handleReuseTurnConfig}
+                onRegenerateTurn={handleRegenerateTurn}
+                onRetryImage={handleRetryImage}
+                onReplyToTurn={handleReplyToTurn}
+                formatConversationTime={formatConversationTime}
+              />
+            )}
           </div>
 
           <div className="relative shrink-0 px-1 sm:px-4">
-            {selectedConversation ? (
+            {selectedConversation && showBottomFade ? (
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-x-0 bottom-full h-10 bg-gradient-to-b from-transparent to-background sm:h-14"
@@ -1258,6 +1575,21 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               referenceImages={referenceImages}
               textareaRef={textareaRef}
               fileInputRef={fileInputRef}
+              replyTarget={
+                replyTarget && replyTarget.conversationId === selectedConversationId
+                  ? { sourcePrompt: replyTarget.sourcePrompt, aiMessage: replyTarget.aiMessage }
+                  : null
+              }
+              onCancelReply={() => {
+                // 回复时的参考图是 handleReplyToTurn 自动塞进来的，
+                // 用户取消回复时一并清掉，避免缩略图又"复活"。
+                setReplyTarget(null);
+                setReferenceImages([]);
+                setReferenceImageFiles([]);
+                if (fileInputRef.current) {
+                  fileInputRef.current.value = "";
+                }
+              }}
               onPromptChange={setImagePrompt}
               onImageCountChange={(value) => setImageCount(value ? clampImageCount(value) : "")}
               onImageSizeChange={setImageSize}

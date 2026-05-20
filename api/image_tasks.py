@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from api.support import require_identity, resolve_image_base_url
+from api.support import consume_user_quota, require_identity, resolve_image_base_url
 from services.content_filter import check_request
 from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
@@ -15,6 +15,10 @@ class ImageGenerationTaskRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     model: str = "gpt-image-2"
     size: str | None = None
+
+
+class ImageTaskCancelRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
 
 
 def _parse_task_ids(value: str) -> list[str]:
@@ -40,6 +44,15 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         return await run_in_threadpool(image_task_service.list_tasks, identity, _parse_task_ids(ids))
 
+    @router.post("/api/image-tasks/cancel")
+    async def cancel_image_tasks(
+        body: ImageTaskCancelRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        identity = require_identity(authorization)
+        ids = [task_id.strip() for task_id in body.ids if task_id and task_id.strip()]
+        return await run_in_threadpool(image_task_service.cancel_tasks, identity, ids)
+
     @router.post("/api/image-tasks/generations")
     async def create_generation_task(
         body: ImageGenerationTaskRequest,
@@ -47,6 +60,9 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        # 前端每张图独立提交一次任务，按 1 扣；额度不足直接 402，
+        # 不要等 submit_generation 跑完才发现没额度。
+        consume_user_quota(identity, 1)
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
         try:
             return await run_in_threadpool(
@@ -73,6 +89,8 @@ def create_router() -> APIRouter:
         size: str | None = Form(default=None),
     ):
         identity = require_identity(authorization)
+        # 同样按 1 张扣；前端会拆成多次提交，所以这里不需要乘以 n。
+        consume_user_quota(identity, 1)
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:

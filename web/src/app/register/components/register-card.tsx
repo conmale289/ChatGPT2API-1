@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -46,6 +46,17 @@ export function RegisterCard() {
   const reset = useSettingsStore((state) => state.resetRegister);
 
   const [configOpen, setConfigOpen] = useState(false);
+  const configSectionRef = useRef<HTMLElement | null>(null);
+
+  // 展开后把整个配置面板的底部滚到视口里。等一帧让 DOM 先渲染完，
+  // 否则 scrollIntoView 拿到的是没展开前的位置。
+  useEffect(() => {
+    if (!configOpen) return;
+    const raf = requestAnimationFrame(() => {
+      configSectionRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [configOpen]);
 
   if (isLoading) {
     return (
@@ -271,7 +282,10 @@ export function RegisterCard() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <section
+        ref={configSectionRef}
+        className="overflow-hidden rounded-xl border border-border bg-card shadow-sm"
+      >
         <div
           role="button"
           tabIndex={0}

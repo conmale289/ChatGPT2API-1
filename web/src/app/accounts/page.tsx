@@ -428,7 +428,10 @@ function AccountsPageContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [viewMode, setViewMode] = useState<"list" | "grid">("grid");
+  // 进度条最小显示时长：即便接口几十 ms 就返回，进度条也至少撑过一次完整滑动，
+  // 避免出现"按钮 disabled 闪一下、进度条一闪而过"的视觉抖动。
+  const [showProgress, setShowProgress] = useState(false);
 
   // 写 accounts 同步刷新缓存。
   const setAccounts = (next: Account[]) => {
@@ -464,6 +467,18 @@ function AccountsPageContent() {
       }
     }
   };
+
+  // 进度条状态机：任一操作中立刻显示，操作结束后再保留 1.2s 让滑动动画走完一程，
+  // 避免缓存命中（几十毫秒返回）时进度条一闪而过。
+  useEffect(() => {
+    const isActive = isLoading || isRefreshing || isDeleting;
+    if (isActive) {
+      setShowProgress(true);
+      return;
+    }
+    const timer = setTimeout(() => setShowProgress(false), 1200);
+    return () => clearTimeout(timer);
+  }, [isLoading, isRefreshing, isDeleting]);
 
   useEffect(() => {
     if (didLoadRef.current) {
@@ -618,7 +633,24 @@ function AccountsPageContent() {
 
   return (
     <>
-      <section className="mt-4 flex flex-col gap-4 sm:mt-6 lg:flex-row lg:items-start lg:justify-between">
+      {/* 顶部进度条：任一刷新/删除操作期间显示，并保证至少滑过一程，
+          避免缓存命中时一闪而过。1.5px 高度 + 主色渐变胶囊滑动。 */}
+      {showProgress ? (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-x-0 top-0 z-50 h-[3px] overflow-hidden bg-stone-100/40"
+        >
+          <div
+            className="animate-top-progress absolute top-0 left-0 h-full w-1/3 rounded-full"
+            style={{
+              background:
+                "linear-gradient(90deg, transparent 0%, oklch(0.55 0.18 258 / 0.95) 50%, transparent 100%)",
+            }}
+          />
+        </div>
+      ) : null}
+
+      <section className="mt-4 flex flex-col gap-4 sm:mt-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-1">
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">
             Account Pool
@@ -631,22 +663,22 @@ function AccountsPageContent() {
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
             onClick={() => void loadAccounts()}
-            disabled={isLoading || isRefreshing || isDeleting}
+            disabled={showProgress}
           >
-            <RefreshCw className={cn("size-4", isLoading ? "animate-spin" : "")} />
+            <RefreshCw className="size-4" />
             刷新
           </Button>
           <Button
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
             onClick={() => void handleRefreshAccounts(accounts.map((item) => item.access_token))}
-            disabled={isLoading || isRefreshing || isDeleting || accounts.length === 0}
+            disabled={showProgress || accounts.length === 0}
           >
-            <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
+            <RefreshCw className="size-4" />
             一键刷新所有账号信息和额度
           </Button>
           <AccountImportDialog
-            disabled={isLoading || isRefreshing || isDeleting}
+            disabled={showProgress}
             onImported={(items) => {
               setAccounts(items);
               setSelectedIds([]);
@@ -713,7 +745,7 @@ function AccountsPageContent() {
         </DialogContent>
       </Dialog>
 
-      <section className="space-y-3">
+      <section className="mt-3 space-y-3 lg:mt-2">
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           {metricCards.map((item) => {
             const Icon = item.icon;
@@ -744,8 +776,8 @@ function AccountsPageContent() {
             </Badge>
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-            <div className="relative min-w-[260px]">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="relative min-w-[200px] flex-1 sm:flex-initial">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-stone-400" />
               <Input
                 value={query}
@@ -764,7 +796,7 @@ function AccountsPageContent() {
                 setPage(1);
               }}
             >
-              <SelectTrigger className="h-10 w-full rounded-xl border-stone-200 bg-white/85 lg:w-[150px]">
+              <SelectTrigger className="h-10 w-full rounded-xl border-stone-200 bg-white/85 sm:w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -782,7 +814,7 @@ function AccountsPageContent() {
                 setPage(1);
               }}
             >
-              <SelectTrigger className="h-10 w-full rounded-xl border-stone-200 bg-white/85 lg:w-[150px]">
+              <SelectTrigger className="h-10 w-full rounded-xl border-stone-200 bg-white/85 sm:w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -794,21 +826,6 @@ function AccountsPageContent() {
               </SelectContent>
             </Select>
             <div className="inline-flex h-10 shrink-0 items-center rounded-xl border border-border bg-secondary/40 p-1">
-              <button
-                type="button"
-                aria-pressed={viewMode === "list"}
-                className={cn(
-                  "inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition",
-                  viewMode === "list"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => setViewMode("list")}
-                title="列表视图"
-              >
-                <Rows3 className="size-3.5" />
-                列表
-              </button>
               <button
                 type="button"
                 aria-pressed={viewMode === "grid"}
@@ -823,6 +840,21 @@ function AccountsPageContent() {
               >
                 <LayoutGrid className="size-3.5" />
                 卡片
+              </button>
+              <button
+                type="button"
+                aria-pressed={viewMode === "list"}
+                className={cn(
+                  "inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition",
+                  viewMode === "list"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setViewMode("list")}
+                title="列表视图"
+              >
+                <Rows3 className="size-3.5" />
+                列表
               </button>
             </div>
           </div>

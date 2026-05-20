@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { AlertCircle, Clock3, Download, LoaderCircle, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { AlertCircle, Clock3, Download, Info, Reply, RotateCcw, Sparkles, Trash2, WalletCards } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
 import type { ImageConversation, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
@@ -22,6 +24,7 @@ type ImageResultsProps = {
   onReuseTurnConfig: (conversationId: string, turnId: string) => void | Promise<void>;
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRetryImage: (conversationId: string, turnId: string, imageId: string) => void | Promise<void>;
+  onReplyToTurn?: (conversationId: string, turnId: string, aiMessage: string) => void;
   formatConversationTime: (value: string) => string;
 };
 
@@ -30,6 +33,14 @@ function getStoredImageSrc(image: StoredImage) {
     return `data:image/png;base64,${image.b64_json}`;
   }
   return image.url || "";
+}
+
+// 单独识别"额度不足"这一类错误。这种错误不应该让用户去点"重试"或者"回复"——
+// 重试还是会被后端打回来，而模型也并没有真正反问什么，没东西可回复。
+// 所以走一张专门的卡片，只展示提示信息，引导用户联系管理员。
+function isQuotaError(message: string | undefined | null) {
+  if (!message) return false;
+  return message.includes("额度不足");
 }
 
 async function downloadStoredImage(image: StoredImage, index: number) {
@@ -55,6 +66,87 @@ async function downloadStoredImage(image: StoredImage, index: number) {
   URL.revokeObjectURL(url);
 }
 
+// 错误卡片里的"模型反问/拒绝"原文直接全部展示，
+// 让卡片随内容长度自适应高度，避免悬浮提示带来的闪烁/对位问题。
+// 用 react-markdown 渲染，覆盖原生标签样式以贴合卡片小字体的语境，
+// 列表/代码/链接都做了紧凑处理避免撑破布局。
+function ErrorMessageBlock({ message }: { message: string }) {
+  return (
+    <div
+      className={cn(
+        "text-[12px] leading-5 break-words text-stone-600 sm:text-[13px] sm:leading-6",
+        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+      )}
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="my-1 whitespace-pre-wrap">{children}</p>,
+          strong: ({ children }) => <strong className="font-semibold text-stone-800">{children}</strong>,
+          em: ({ children }) => <em className="italic">{children}</em>,
+          a: ({ children, href }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-stone-700 underline decoration-stone-300 underline-offset-2 transition hover:text-stone-900 hover:decoration-stone-500"
+            >
+              {children}
+            </a>
+          ),
+          ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-4">{children}</ul>,
+          ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-4">{children}</ol>,
+          li: ({ children }) => <li className="leading-5 sm:leading-6">{children}</li>,
+          h1: ({ children }) => <h1 className="my-1 text-[13px] font-semibold text-stone-800 sm:text-sm">{children}</h1>,
+          h2: ({ children }) => <h2 className="my-1 text-[13px] font-semibold text-stone-800 sm:text-sm">{children}</h2>,
+          h3: ({ children }) => <h3 className="my-1 text-[12px] font-semibold text-stone-800 sm:text-[13px]">{children}</h3>,
+          h4: ({ children }) => <h4 className="my-1 text-[12px] font-semibold text-stone-800 sm:text-[13px]">{children}</h4>,
+          h5: ({ children }) => <h5 className="my-1 text-[12px] font-semibold text-stone-800 sm:text-[13px]">{children}</h5>,
+          h6: ({ children }) => <h6 className="my-1 text-[12px] font-semibold text-stone-800 sm:text-[13px]">{children}</h6>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-1 border-l-2 border-stone-200 pl-2 text-stone-500">{children}</blockquote>
+          ),
+          hr: () => <hr className="my-2 border-stone-200" />,
+          code: ({ className, children, ...props }) => {
+            const isInline = !/language-/.test(className || "");
+            if (isInline) {
+              return (
+                <code
+                  className="rounded bg-stone-100 px-1 py-0.5 text-[11px] font-mono text-stone-800 sm:text-[12px]"
+                  {...props}
+                >
+                  {children}
+                </code>
+              );
+            }
+            return (
+              <code className={cn("font-mono text-[11px] sm:text-[12px]", className)} {...props}>
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => (
+            <pre className="my-1 overflow-x-auto rounded-lg bg-stone-100 px-2 py-1.5 text-[11px] leading-5 text-stone-800 sm:text-[12px]">
+              {children}
+            </pre>
+          ),
+          table: ({ children }) => (
+            <div className="my-1 overflow-x-auto">
+              <table className="w-full border-collapse text-[11px] sm:text-[12px]">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-stone-200 bg-stone-50 px-2 py-1 text-left font-medium text-stone-700">{children}</th>
+          ),
+          td: ({ children }) => <td className="border border-stone-200 px-2 py-1">{children}</td>,
+        }}
+      >
+        {message}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 export function ImageResults({
   selectedConversation,
   onOpenLightbox,
@@ -64,6 +156,7 @@ export function ImageResults({
   onReuseTurnConfig,
   onRegenerateTurn,
   onRetryImage,
+  onReplyToTurn,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -158,6 +251,23 @@ export function ImageResults({
     );
   }
 
+  // 整段对话里所有「成功生成」的图（按 turn 顺序）。
+  // 灯箱的左侧缩略图带就走这份列表，参考图（用户上传）不计入。
+  const allSuccessfulImages: ImageLightboxItem[] = selectedConversation.turns.flatMap((turn) =>
+    turn.images.flatMap((image) => {
+      const src = image.status === "success" ? getStoredImageSrc(image) : "";
+      if (!src) return [];
+      return [
+        {
+          id: image.id,
+          src,
+          sizeLabel: image.b64_json ? formatBase64ImageSize(image.b64_json) : undefined,
+          dimensions: imageDimensions[image.id],
+        },
+      ];
+    }),
+  );
+
   return (
     <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5 sm:gap-8">
       {selectedConversation.turns.map((turn, turnIndex) => {
@@ -165,19 +275,6 @@ export function ImageResults({
           id: `${turn.id}-reference-${index}`,
           src: image.dataUrl,
         }));
-        const successfulTurnImages = turn.images.flatMap((image) => {
-          const src = image.status === "success" ? getStoredImageSrc(image) : "";
-          return src
-            ? [
-                {
-                  id: image.id,
-                  src,
-                  sizeLabel: image.b64_json ? formatBase64ImageSize(image.b64_json) : undefined,
-                  dimensions: imageDimensions[image.id],
-                },
-              ]
-            : [];
-        });
 
         return (
           <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
@@ -260,11 +357,11 @@ export function ImageResults({
                     ) : null}
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 sm:block sm:columns-2 sm:gap-4 sm:space-y-4 xl:columns-3">
+                  <div className="grid grid-cols-3 gap-2 sm:gap-3">
                     {turn.images.map((image, index) => {
                       const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
                       if (image.status === "success" && imageSrc) {
-                        const currentIndex = successfulTurnImages.findIndex((item) => item.id === image.id);
+                        const currentIndex = allSuccessfulImages.findIndex((item) => item.id === image.id);
                         const sizeLabel = image.b64_json ? formatBase64ImageSize(image.b64_json) : "";
                         const dimensions = imageDimensions[image.id];
                         const imageMeta = [sizeLabel, dimensions].filter(Boolean).join(" · ");
@@ -276,13 +373,13 @@ export function ImageResults({
                           >
                             <button
                               type="button"
-                              onClick={() => onOpenLightbox(successfulTurnImages, currentIndex)}
-                              className="group block aspect-square w-full cursor-zoom-in overflow-hidden rounded-2xl bg-stone-50 sm:aspect-auto"
+                              onClick={() => onOpenLightbox(allSuccessfulImages, currentIndex)}
+                              className="group block aspect-square w-full cursor-zoom-in overflow-hidden rounded-2xl"
                             >
                               <img
                                 src={imageSrc}
                                 alt={`Generated result ${index + 1}`}
-                                className="block h-full w-full object-cover transition duration-200 group-hover:brightness-90 sm:h-auto sm:object-contain"
+                                className="block h-full w-full object-cover transition duration-200 group-hover:brightness-90"
                                 onLoad={(event) => {
                                   updateImageDimensions(
                                     image.id,
@@ -323,26 +420,95 @@ export function ImageResults({
                       }
 
                       if (image.status === "error") {
+                        const errorMessage = image.error || "生成失败";
+                        // 额度不足是"配额"问题不是"模型反问"，重试/回复都没有意义，
+                        // 单独走一张安静的提示卡，引导用户联系管理员。
+                        if (isQuotaError(errorMessage)) {
+                          return (
+                            <div
+                              key={image.id}
+                              className="relative break-inside-avoid rounded-xl border border-amber-200/70 bg-amber-50/60"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => onDeleteResults(selectedConversation.id, turn.id)}
+                                className="absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-full text-amber-500/70 transition hover:bg-white hover:text-rose-500"
+                                aria-label="删除生成结果"
+                              >
+                                <Trash2 className="size-3" />
+                              </button>
+                              <div className="flex flex-col items-center gap-2 px-3 py-4 text-center sm:gap-3 sm:px-5 sm:py-5">
+                                <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-amber-500 shadow-sm sm:size-8">
+                                  <WalletCards className="size-3.5 sm:size-4" />
+                                </span>
+                                <p className="text-[12px] leading-5 font-medium text-amber-900 sm:text-[13px] sm:leading-6">
+                                  {errorMessage}
+                                </p>
+                                <p className="text-[11px] leading-4 text-amber-700/80 sm:text-[12px] sm:leading-5">
+                                  请联系管理员追加额度后再继续生成
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div
                             key={image.id}
-                            className="break-inside-avoid overflow-hidden rounded-xl border border-stone-200/80 bg-stone-50"
+                            className="break-inside-avoid rounded-xl border border-stone-200/80 bg-stone-50"
                           >
-                            <div className="flex flex-col items-center justify-center gap-2 px-3 py-4 text-center sm:gap-3 sm:px-5 sm:py-5">
-                              <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
-                                <AlertCircle className="size-3.5 sm:size-4" />
-                              </span>
-                              <span className="line-clamp-2 text-[11px] leading-4 text-stone-500 sm:line-clamp-3 sm:text-[13px] sm:leading-5">
-                                {image.error || "生成失败"}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => void onRetryImage(selectedConversation.id, turn.id, image.id)}
-                                className="inline-flex items-center gap-1 rounded-full bg-stone-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-stone-800 sm:px-3 sm:text-xs"
-                              >
-                                <RotateCcw className="size-3" />
-                                重试
-                              </button>
+                            <div className="flex flex-col gap-2 px-3 py-4 sm:gap-3 sm:px-5 sm:py-5">
+                              <div className="flex justify-center">
+                                <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
+                                  <AlertCircle className="size-3.5 sm:size-4" />
+                                </span>
+                              </div>
+                              <ErrorMessageBlock message={errorMessage} />
+                              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => void onRetryImage(selectedConversation.id, turn.id, image.id)}
+                                  className="inline-flex items-center gap-1 rounded-full bg-stone-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-stone-800 sm:px-3 sm:text-xs"
+                                >
+                                  <RotateCcw className="size-3" />
+                                  重试
+                                </button>
+                                {onReplyToTurn && image.error ? (
+                                  <div className="relative inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => onReplyToTurn(selectedConversation.id, turn.id, image.error || "")}
+                                      className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-stone-700 ring-1 ring-stone-200 transition hover:bg-stone-100 hover:text-stone-900 sm:px-3 sm:text-xs"
+                                      aria-label="基于该提问继续回复"
+                                    >
+                                      <Reply className="size-3" />
+                                      回复
+                                    </button>
+                                    {/* Info 提示：纯 CSS peer-hover 实现，
+                                        鼠标悬浮 / 键盘聚焦 ! 图标时显示，离开即隐。
+                                        tooltip 是 pointer-events-none，不会反过来拦截鼠标，
+                                        所以不会出现之前那种"在触发区和卡片之间穿模"的闪烁。 */}
+                                    <span
+                                      tabIndex={0}
+                                      role="button"
+                                      aria-label="为什么需要点回复"
+                                      className="peer inline-flex size-5 cursor-help items-center justify-center rounded-full text-stone-400 ring-1 ring-stone-200 transition hover:bg-white hover:text-stone-700 focus:bg-white focus:text-stone-700 focus:outline-none"
+                                    >
+                                      <Info className="size-3" />
+                                    </span>
+                                    <div
+                                      role="tooltip"
+                                      className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-60 -translate-x-1/2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-left text-[11px] leading-5 text-stone-600 opacity-0 shadow-[0_2px_4px_rgba(15,23,42,0.04),0_12px_28px_-12px_rgba(15,23,42,0.25)] transition peer-hover:opacity-100 peer-focus:opacity-100 sm:text-[12px]"
+                                    >
+                                      <p className="mb-1 font-medium text-stone-800">为什么要点"回复"？</p>
+                                      <p>
+                                        图片接口本身没有上下文。点"回复"会把这一轮的提问与参考图一起带给模型；
+                                        如果直接在下方输入框回答，模型只会当成一次新的画图请求，不知道你在回应它的反问。
+                                      </p>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
                         );
@@ -351,56 +517,55 @@ export function ImageResults({
                       return (
                         <div
                           key={image.id}
-                          className={cn(
-                            "break-inside-avoid overflow-hidden rounded-2xl bg-stone-50",
-                            turn.size === "1:1" && "aspect-square",
-                            turn.size === "16:9" && "aspect-video",
-                            turn.size === "9:16" && "aspect-[9/16]",
-                            turn.size === "4:3" && "aspect-[4/3]",
-                            turn.size === "3:4" && "aspect-[3/4]",
-                            !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "aspect-square",
-                          )}
+                          className="relative aspect-square break-inside-avoid overflow-hidden rounded-2xl bg-stone-100/80"
                         >
-                          <div className="flex h-full flex-col items-center justify-center gap-2 px-2 py-3 text-center text-stone-400 sm:gap-3 sm:px-6 sm:py-8">
-                            <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
-                              {turn.status === "queued" ? (
+                          {turn.status === "queued" ? (
+                            <div className="flex h-full flex-col items-center justify-center gap-2 px-2 py-3 text-center text-stone-400">
+                              <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
                                 <Clock3 className="size-3.5 sm:size-4" />
-                              ) : (
-                                <LoaderCircle className="size-3.5 animate-spin sm:size-4" />
-                              )}
-                            </span>
-                            <p className="text-[11px] leading-4 text-stone-500 sm:text-[13px]">{turn.status === "queued" ? "排队中" : "处理中"}</p>
-                          </div>
+                              </span>
+                              <p className="text-[11px] leading-4 text-stone-500 sm:text-[13px]">排队中</p>
+                            </div>
+                          ) : (
+                            <>
+                              <div aria-hidden className="dot-grid-loader absolute inset-0" />
+                              <div className="absolute top-2 left-3 text-[11px] font-medium text-stone-500 sm:top-3 sm:left-4 sm:text-xs">
+                                正在创建图片
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })}
                   </div>
 
-                  {turn.status === "error" && turn.error ? (
+                  {turn.status === "error" && turn.error && !isQuotaError(turn.error) ? (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-stone-100 px-3 py-1 text-[11px] text-stone-500 sm:mt-4 sm:text-xs">
                       <AlertCircle className="size-3 text-stone-400" />
                       <span>{turn.error}</span>
                     </div>
                   ) : null}
 
-                  <div className="mt-3 flex items-center gap-1.5 text-[11px] sm:mt-4">
-                    <button
-                      type="button"
-                      onClick={() => void onRegenerateTurn(selectedConversation.id, turn.id)}
-                      className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 font-medium text-stone-500 transition hover:bg-stone-200 hover:text-stone-900"
-                    >
-                      <RotateCcw className="size-3" />
-                      全部重新生成
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteResults(selectedConversation.id, turn.id)}
-                      className="inline-flex size-6 items-center justify-center rounded-full text-stone-300 transition hover:bg-rose-50 hover:text-rose-500"
-                      aria-label="删除生成结果"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
-                  </div>
+                  {isQuotaError(turn.error) ? null : (
+                    <div className="mt-3 flex items-center gap-1.5 text-[11px] sm:mt-4">
+                      <button
+                        type="button"
+                        onClick={() => void onRegenerateTurn(selectedConversation.id, turn.id)}
+                        className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 font-medium text-stone-500 transition hover:bg-stone-200 hover:text-stone-900"
+                      >
+                        <RotateCcw className="size-3" />
+                        全部重新生成
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteResults(selectedConversation.id, turn.id)}
+                        className="inline-flex size-6 items-center justify-center rounded-full text-stone-300 transition hover:bg-rose-50 hover:text-rose-500"
+                        aria-label="删除生成结果"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : null}
