@@ -70,6 +70,26 @@ def consume_user_quota(identity: dict[str, object], amount: int) -> None:
         raise HTTPException(status_code=402, detail={"error": reason})
 
 
+def refund_user_quota(identity: dict[str, object], amount: int) -> None:
+    """画图上游真失败时把预扣的额度退回去。
+    与 [consume_user_quota] 对称：admin / unlimited 直接 noop。
+
+    调用时机限定在"上游真实失败"分支（content_policy / 5xx / 上游超时 / 任务取消）。
+    用户输入错误（400 / 文本审查不过）走 fail-fast 路径，已经在扣费前就 raise，
+    走不到这里——所以这里不需要再区分原因。
+    任何异常吞掉：退款失败也不该影响错误响应本身。
+    """
+    role = str(identity.get("role") or "").strip().lower()
+    item_id = str(identity.get("id") or "").strip()
+    if role == "admin" or not item_id or item_id == "admin":
+        return
+    try:
+        auth_service.refund_quota(item_id, max(1, int(amount or 1)))
+    except Exception:
+        # 退款失败也不抛——主流程已经在返回错误响应了，再叠一个错误更糟
+        pass
+
+
 def sanitize_cpa_pool(pool: dict | None) -> dict | None:
     if not isinstance(pool, dict):
         return None

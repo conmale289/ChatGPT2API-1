@@ -64,6 +64,8 @@ export type SettingsConfig = {
   };
   refresh_account_interval_minute?: number | string;
   image_retention_days?: number | string;
+  cleanup_protect_gallery?: boolean;
+  cleanup_protect_user_images?: boolean;
   image_poll_timeout_secs?: number | string;
   image_account_concurrency?: number | string;
   auto_remove_invalid_accounts?: boolean;
@@ -155,6 +157,9 @@ export type ManagedImage = {
   // 后端在 list_images 里打的标记：true 表示该 owner_id 落在 admin 集合里。
   // 前端用它把 badge 显示成"管理员"，避免暴露具体 admin 密钥 id。
   is_admin_owner?: boolean;
+  // 生成时记下来的 prompt 原文（image_prompts.json）。老数据为空字符串。
+  // 给"我的作品"页一键复用 / 发布画廊用；为空时前端弹窗手填。
+  prompt?: string;
 };
 
 export type ImageOwner = {
@@ -475,6 +480,21 @@ export async function fetchManagedImages(filters: { start_date?: string; end_dat
   if (filters.owner) params.set("owner", filters.owner);
   return httpRequest<{ items: ManagedImage[]; groups: Array<{ date: string; items: ManagedImage[] }> }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
+  );
+}
+
+/**
+ * 拉登录用户自己的图。后端按 identity.id 自动过滤 image_owners.json：
+ *  - user 角色：只返回 owner == 自己的图
+ *  - admin 角色：返回所有 admin 生成的图（owner=__admin__ 桶）
+ * 给 web "我的作品" 页用，跟 Android 端 listMyImages 同一接口。
+ */
+export async function fetchMyWorks(filters: { start_date?: string; end_date?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filters.start_date) params.set("start_date", filters.start_date);
+  if (filters.end_date) params.set("end_date", filters.end_date);
+  return httpRequest<{ items: ManagedImage[]; groups: Array<{ date: string; items: ManagedImage[] }> }>(
+    `/api/me/images${params.toString() ? `?${params.toString()}` : ""}`,
   );
 }
 
@@ -804,5 +824,108 @@ export async function testProxy(url?: string) {
   return httpRequest<{ result: ProxyTestResult }>("/api/proxy/test", {
     method: "POST",
     body: { url: url ?? "" },
+  });
+}
+
+/* ───────── 公共画廊 ───────── */
+
+export type GalleryItem = {
+  id: string;
+  url: string;
+  image_rel: string;
+  prompt: string;
+  model: string;
+  size: string;
+  width: number;
+  height: number;
+  publisher_name: string;
+  created_at: number;
+  status: "visible" | "hidden" | string;
+  /**
+   * 图生图标记。后端在 publish 时检测 image_edits set，命中就强制把 prompt
+   * 落空并置 is_edit=true。前端据此把 prompt 区换成"提示词依赖参考图"提示卡，
+   * 避免别人复制了一段对参考图的修改指令以为能复现，结果完全跑偏。
+   */
+  is_edit?: boolean;
+  /**
+   * 后端 _public_view 派生：当前请求者是否就是这条画廊的发布者。
+   * 用于在画廊详情里给「我的发布」额外暴露撤回入口；admin 不依赖这个字段，
+   * 走自己那套 hide/unhide/permanent delete 流程。
+   * 后端只在 viewer_id 非空且与 publisher_id 一致时才置 true，绝不暴露 publisher_id 本身。
+   */
+  is_mine?: boolean;
+};
+
+export type GalleryFeedResponse = {
+  items: GalleryItem[];
+  next_cursor: string;
+};
+
+export async function fetchGalleryFeed(opts: {
+  cursor?: string | null;
+  limit?: number;
+  includeHidden?: boolean;
+}) {
+  const params = new URLSearchParams();
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  params.set("limit", String(opts.limit ?? 24));
+  if (opts.includeHidden) params.set("include_hidden", "true");
+  return httpRequest<GalleryFeedResponse>(`/api/gallery/feed?${params.toString()}`);
+}
+
+export async function fetchGalleryItem(id: string) {
+  return httpRequest<{ item: GalleryItem }>(`/api/gallery/items/${id}`);
+}
+
+export async function publishGalleryItem(body: {
+  image_rel: string;
+  prompt: string;
+  model?: string;
+  size?: string;
+  width?: number;
+  height?: number;
+}) {
+  return httpRequest<{ item: GalleryItem }>("/api/gallery/publish", {
+    method: "POST",
+    body,
+  });
+}
+
+/**
+ * 批量查"哪些 rel 发过画廊"。给"我的作品"页 / admin 图片管理页 reload 时
+ * 一次播种 publishStates，否则刷新后角标会丢（state 是前端 Map，重 mount 即清空）。
+ *
+ * 后端只返回查到记录的 rel，未发布的 rel 不在 items key 里。
+ *
+ * admin 调用时后端自动按 check_any_publisher=True 跨用户查询，并在每条记录
+ * 附带 publisher_name；普通 user 查到的永远是自己发的，publisher_name 也会填。
+ */
+export async function getMyPublishedBatch(image_rels: string[]) {
+  return httpRequest<{
+    items: Record<
+      string,
+      { published: boolean; id: string; status: string; publisher_name?: string }
+    >;
+  }>("/api/gallery/published/batch", {
+    method: "POST",
+    body: { image_rels },
+  });
+}
+
+export async function unpublishGalleryItem(id: string) {
+  return httpRequest<{ ok: boolean }>(`/api/gallery/items/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function hideGalleryItem(id: string) {
+  return httpRequest<{ ok: boolean }>(`/api/gallery/items/${id}/hide`, {
+    method: "POST",
+  });
+}
+
+export async function unhideGalleryItem(id: string) {
+  return httpRequest<{ ok: boolean }>(`/api/gallery/items/${id}/unhide`, {
+    method: "POST",
   });
 }

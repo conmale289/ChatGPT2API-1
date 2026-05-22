@@ -11,25 +11,11 @@ from api.support import require_admin, require_identity, resolve_image_base_url
 from services.auth_service import auth_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
-from services.image_owners_service import owner_counts
+from services.image_owners_service import get_owner, owner_counts
 from services.image_service import count_total_images, delete_images, download_images_zip, get_image_download_response, get_thumbnail_response, list_images
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import test_proxy
-
-
-def _admin_owner_ids() -> set[str]:
-    """收集所有可能落在 image_owners.json 里的 admin id：
-    - "admin"：旧 auth_key（CHATGPT2API_AUTH_KEY / config.json.auth-key）的固定 id
-    - 其余：通过 auth_service 创建的 admin 角色密钥
-    用来把"管理员生成"和"真孤儿"两个桶区分开，别再混在一起。
-    """
-    ids: set[str] = {"admin"}
-    for item in auth_service.list_keys(role="admin"):
-        uid = str(item.get("id") or "").strip()
-        if uid:
-            ids.add(uid)
-    return ids
 
 
 def _admin_owner_ids() -> set[str]:
@@ -119,6 +105,38 @@ def create_router(app_version: str) -> APIRouter:
             admin_ids=_admin_owner_ids(),
         )
 
+    @router.get("/api/me/images")
+    async def get_my_images(
+        request: Request,
+        start_date: str = "",
+        end_date: str = "",
+        authorization: str | None = Header(default=None),
+    ):
+        """登录用户视角的"我的图片"。
+
+        鉴权用 require_identity，普通 user 密钥也能调；按 identity.id 自动过滤
+        image_owners.json 里挂在自己名下的图。Admin 调时退化为 owner=__admin__,
+        把所有 admin 生成的图聚合返回（语义上"我"= 管理员这个角色）。
+
+        - Android / 未来其他客户端启动时 fetch 这个端点把云端历史合并进本地 Room
+        - 不开放 owner 参数，避免用户冒名查别人的图
+        """
+        identity = require_identity(authorization)
+        admin_ids = _admin_owner_ids()
+        role = str(identity.get("role") or "").strip()
+        identity_id = str(identity.get("id") or "").strip()
+        if role == "admin" or identity_id in admin_ids:
+            owner_filter = "__admin__"
+        else:
+            owner_filter = identity_id
+        return list_images(
+            resolve_image_base_url(request),
+            start_date=start_date.strip(),
+            end_date=end_date.strip(),
+            owner=owner_filter,
+            admin_ids=admin_ids,
+        )
+
     @router.get("/api/images/owners")
     async def get_image_owners(authorization: str | None = Header(default=None)):
         """图片管理页用户筛选下拉的数据源。
@@ -172,15 +190,34 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.post("/api/images/delete")
     async def delete_images_endpoint(body: ImageDeleteRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return delete_images(
-            body.paths,
-            start_date=body.start_date.strip(),
-            end_date=body.end_date.strip(),
-            owner=body.owner.strip(),
-            all_matching=body.all_matching,
-            admin_ids=_admin_owner_ids(),
-        )
+        """图片删除：
+          - admin：全权，可按路径 / 按 owner / all_matching 任意筛选删
+          - user：只能按路径删自己的图（image_owners.json 里 owner == identity.id）
+            其余筛选参数 (start_date / end_date / owner / all_matching) 一律忽略，
+            避免误把 all_matching=true 当成"清空所有"操作。
+        """
+        identity = require_identity(authorization)
+        role = str(identity.get("role") or "").lower()
+        if role == "admin":
+            return delete_images(
+                body.paths,
+                start_date=body.start_date.strip(),
+                end_date=body.end_date.strip(),
+                owner=body.owner.strip(),
+                all_matching=body.all_matching,
+                admin_ids=_admin_owner_ids(),
+            )
+        # 普通用户路径：只允许按 paths 删自己拥有的图
+        user_id = str(identity.get("id") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=403, detail={"error": "无权删除"})
+        requested = [p.strip().lstrip("/") for p in (body.paths or []) if p and p.strip()]
+        # owner 校验：每条 path 都必须 owner == 自己；不是的直接丢弃
+        # 这样客户端误传别人的图也只是不删，不会泄露归属
+        owned = [rel for rel in requested if get_owner(rel) == user_id]
+        if not owned:
+            return {"removed": 0}
+        return delete_images(owned)
 
     @router.post("/api/images/download")
     async def download_images_endpoint(body: ImageDownloadRequest, authorization: str | None = Header(default=None)):

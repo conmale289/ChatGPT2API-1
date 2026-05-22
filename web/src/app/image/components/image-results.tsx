@@ -1,7 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { AlertCircle, Clock3, Download, Info, Reply, RotateCcw, Sparkles, Trash2, WalletCards } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Clock3,
+  Download,
+  Info,
+  LoaderCircle,
+  Reply,
+  RotateCcw,
+  Share2,
+  Sparkles,
+  Trash2,
+  WalletCards,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -15,6 +28,15 @@ export type ImageLightboxItem = {
   dimensions?: string;
 };
 
+/**
+ * 单张图片在画廊里的发布态。
+ *  - idle：未发布（默认）
+ *  - publishing：正在发请求
+ *  - published：已发布
+ *  - unsupported：本地 b64 图，没有 image_rel，无法发画廊（按钮置灰）
+ */
+export type ImagePublishState = "idle" | "publishing" | "published" | "unsupported";
+
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
@@ -25,6 +47,13 @@ type ImageResultsProps = {
   onRegenerateTurn: (conversationId: string, turnId: string) => void | Promise<void>;
   onRetryImage: (conversationId: string, turnId: string, imageId: string) => void | Promise<void>;
   onReplyToTurn?: (conversationId: string, turnId: string, aiMessage: string) => void;
+  /**
+   * 单图发布到画廊。turnId + image 一起传，让父组件能拿到 turn.prompt / model / size
+   * 拼成 publish 请求体。父组件用 publishState 反推每张图的状态显示。
+   */
+  onPublishImage?: (conversationId: string, turnId: string, image: StoredImage) => void | Promise<void>;
+  /** 用 image.id 索引发布态。父组件用 Map 维护。 */
+  publishStateOf?: (image: StoredImage) => ImagePublishState;
   formatConversationTime: (value: string) => string;
 };
 
@@ -157,6 +186,8 @@ export function ImageResults({
   onRegenerateTurn,
   onRetryImage,
   onReplyToTurn,
+  onPublishImage,
+  publishStateOf,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -174,35 +205,62 @@ export function ImageResults({
   if (!selectedConversation) {
     return (
       <div className="relative flex h-full items-center justify-center text-center">
-        {/* 装饰层全部 absolute，不开 overflow-hidden，让光自然外溢与背景融合 */}
+        {/* 装饰层用 fixed inset-0 + overflow-hidden 包一层，
+            把超出视口的光斑裁剪掉，避免撑出滚动条；
+            内层光斑改回 absolute，相对这个视口尺寸的容器定位。
+            z-0 让它在内容下方、navbar (z-40) 后方，导航栏 backdrop-blur 自然柔化透出。 */}
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
+          style={{
+            // 椭圆羽化：中心 18% 内全保留，往外一路平滑过渡到完全透明，
+            // 边缘没有任何"光层"的轮廓感。
+            maskImage:
+              "radial-gradient(ellipse 60% 70% at 50% 50%, #000 18%, rgba(0,0,0,0.6) 55%, transparent 95%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 60% 70% at 50% 50%, #000 18%, rgba(0,0,0,0.6) 55%, transparent 95%)",
+          }}
+        >
+          {/* Aurora 光斑：冷蓝 + 暖米，错位漂浮，softer + 更大半径，避免硬边 */}
+          <div
+            className="aurora-drift-a absolute top-[-10%] left-[-8%] size-[720px] blur-[130px]"
+            style={{
+              background:
+                "radial-gradient(circle at 50% 50%, oklch(0.74 0.11 250 / 0.40), transparent 70%)",
+            }}
+          />
+          <div
+            className="aurora-drift-b absolute right-[-8%] bottom-[-8%] size-[720px] blur-[130px]"
+            style={{
+              background:
+                "radial-gradient(circle at 50% 50%, oklch(0.80 0.09 60 / 0.36), transparent 70%)",
+            }}
+          />
+          {/* 反角 accent，铺一层薄色，避免出现"对角空缺" */}
+          <div
+            className="aurora-drift-b absolute top-[-6%] right-[8%] size-[520px] blur-[120px]"
+            style={{
+              background:
+                "radial-gradient(circle at 50% 50%, oklch(0.82 0.07 60 / 0.24), transparent 70%)",
+            }}
+          />
+          <div
+            className="aurora-drift-a absolute bottom-[-6%] left-[10%] size-[520px] blur-[120px]"
+            style={{
+              background:
+                "radial-gradient(circle at 50% 50%, oklch(0.76 0.09 250 / 0.26), transparent 70%)",
+            }}
+          />
 
-        {/* Aurora 光斑：冷蓝 + 暖米，错位漂浮，softer + 更大半径，避免硬边 */}
-        <div
-          aria-hidden
-          className="aurora-drift-a pointer-events-none absolute top-[6%] left-[10%] size-[520px] blur-[110px]"
-          style={{
-            background:
-              "radial-gradient(circle at 50% 50%, oklch(0.74 0.11 250 / 0.32), transparent 70%)",
-          }}
-        />
-        <div
-          aria-hidden
-          className="aurora-drift-b pointer-events-none absolute right-[8%] bottom-[6%] size-[520px] blur-[110px]"
-          style={{
-            background:
-              "radial-gradient(circle at 50% 50%, oklch(0.80 0.09 60 / 0.30), transparent 70%)",
-          }}
-        />
-
-        {/* 中心慢转 conic 极淡光晕，给画面"呼吸"但不形成边界 */}
-        <div
-          aria-hidden
-          className="aurora-spin pointer-events-none absolute top-1/2 left-1/2 size-[760px] opacity-50 blur-2xl"
-          style={{
-            background:
-              "conic-gradient(from 90deg at 50% 50%, transparent 0deg, oklch(0.85 0.06 250 / 0.18) 70deg, transparent 150deg, oklch(0.86 0.06 60 / 0.16) 250deg, transparent 330deg)",
-          }}
-        />
+          {/* 中心慢转 conic 极淡光晕，给画面"呼吸"但不形成边界 */}
+          <div
+            className="aurora-spin absolute top-1/2 left-1/2 size-[960px] -translate-x-1/2 -translate-y-1/2 opacity-50 blur-2xl"
+            style={{
+              background:
+                "conic-gradient(from 90deg at 50% 50%, transparent 0deg, oklch(0.85 0.06 250 / 0.18) 70deg, transparent 150deg, oklch(0.86 0.06 60 / 0.16) 250deg, transparent 330deg)",
+            }}
+          />
+        </div>
 
         {/* 文案内容 */}
         <div className="relative w-full max-w-4xl px-6">
@@ -389,30 +447,87 @@ export function ImageResults({
                                 }}
                               />
                             </button>
-                            <div className="flex flex-col gap-1 px-0.5 py-1.5 text-[10px] sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-1 sm:py-2 sm:text-xs">
-                              <div className="min-w-0 text-stone-400">
+                            {/* 单格底部：左侧"结果 N + 尺寸"自适应截断，右侧 3 个按钮恒为图标。
+                                3 列 grid 下每格 ≈ 视口 1/3，再叠中文 label 任何断点都挤不下，
+                                曾出现"加入编辑"逐字竖排 bug。统一图标 + tooltip，按钮 shrink-0 + nowrap 兜底。 */}
+                            <div className="flex items-center gap-2 px-0.5 py-1.5 text-[10px] sm:px-1 sm:py-2 sm:text-xs">
+                              <div className="min-w-0 flex-1 truncate whitespace-nowrap text-stone-400">
                                 <span>结果 {index + 1}</span>
-                                {imageMeta ? <span className="block sm:ml-2 sm:inline">{imageMeta}</span> : null}
+                                {imageMeta ? <span className="ml-2">{imageMeta}</span> : null}
                               </div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex shrink-0 items-center gap-1.5">
                                 <button
                                   type="button"
                                   onClick={() => onContinueEdit(selectedConversation.id, image)}
-                                  className="inline-flex h-7 items-center justify-center gap-1 rounded-full bg-stone-100 px-2.5 text-[11px] font-medium text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
+                                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
                                   aria-label="加入编辑"
+                                  title="加入编辑"
                                 >
-                                  <Sparkles className="size-3" />
-                                  <span className="hidden sm:inline">加入编辑</span>
+                                  <Sparkles className="size-3.5" />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => void downloadStoredImage(image, index)}
-                                  className="inline-flex h-7 items-center justify-center gap-1 rounded-full bg-stone-100 px-2.5 text-[11px] font-medium text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
+                                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
                                   aria-label="下载"
+                                  title="下载"
                                 >
-                                  <Download className="size-3" />
-                                  <span className="hidden sm:inline">下载</span>
+                                  <Download className="size-3.5" />
                                 </button>
+                                {/* 发布到画廊。state 控制视觉与是否可点：
+                                    - idle：可点击，默认描边按钮
+                                    - publishing：禁用 + 旋转图标
+                                    - published：禁用 + 对勾，title 提示"已发布"
+                                    - unsupported：禁用 + 灰显，title 提示原因（一般是 b64 直返不带 url） */}
+                                {(() => {
+                                  const state = publishStateOf?.(image) ?? "idle";
+                                  const disabled = state !== "idle";
+                                  const Icon =
+                                    state === "publishing"
+                                      ? LoaderCircle
+                                      : state === "published"
+                                        ? Check
+                                        : Share2;
+                                  const label =
+                                    state === "publishing"
+                                      ? "发布中"
+                                      : state === "published"
+                                        ? "已发布"
+                                        : "发布画廊";
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onPublishImage?.(selectedConversation.id, turn.id, image)
+                                      }
+                                      disabled={disabled}
+                                      title={
+                                        state === "unsupported"
+                                          ? "本地图片暂无法发布到画廊"
+                                          : state === "published"
+                                            ? "已发布到画廊"
+                                            : "发布到画廊"
+                                      }
+                                      className={cn(
+                                        "inline-flex size-7 shrink-0 items-center justify-center rounded-full transition",
+                                        state === "published"
+                                          ? "bg-emerald-50 text-emerald-700"
+                                          : state === "unsupported"
+                                            ? "cursor-not-allowed bg-stone-50 text-stone-300"
+                                            : "bg-stone-100 text-stone-600 hover:bg-stone-200 hover:text-stone-900",
+                                        disabled && state !== "published" && "opacity-70",
+                                      )}
+                                      aria-label={label}
+                                    >
+                                      <Icon
+                                        className={cn(
+                                          "size-3.5",
+                                          state === "publishing" && "animate-spin",
+                                        )}
+                                      />
+                                    </button>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </div>

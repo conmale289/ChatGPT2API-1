@@ -189,7 +189,7 @@ export function ImageComposer({
 
   return (
     <div className="shrink-0 flex justify-center px-1 sm:px-0">
-      <div style={{ width: "min(980px, 100%)" }}>
+      <div className="relative" style={{ width: "min(980px, 100%)" }}>
         <input
           ref={fileInputRef}
           type="file"
@@ -201,44 +201,51 @@ export function ImageComposer({
           }}
         />
 
+        {/* 缩略图行用 absolute 浮在 composer 输入框正上方，不占文档高度。
+            否则空状态下加参考图会让 composer 区从 ~200px 长到 ~280px，
+            results (flex-1) 被压缩 ~80px，items-center 居中的 hero 文案就被顶上去了。
+            外层 relative 由父级 image-composer wrapper 提供（rounded-[28px] bg-white 那块）。
+            移动端 (sm 以下) 横向滚动；桌面端 sm: 起 flex-wrap。 */}
         {referenceImages.length > 0 && !replyTarget ? (
-          <div className="mb-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mb-3 sm:flex-wrap sm:overflow-visible sm:pb-0">
-            {referenceImages.map((image, index) => (
-              <div key={`${image.name}-${index}`} className="relative size-14 shrink-0 sm:size-16">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLightboxIndex(index);
-                    setLightboxOpen(true);
-                  }}
-                  className="group size-14 overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 transition hover:border-stone-300 sm:size-16"
-                  aria-label={`预览参考图 ${image.name || index + 1}`}
-                >
-                  <img
-                    src={image.dataUrl}
-                    alt={image.name || `参考图 ${index + 1}`}
-                    className="h-full w-full object-cover"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onRemoveReferenceImage(index);
-                  }}
-                  className="absolute -right-1 -top-1 inline-flex size-5 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
-                  aria-label={`移除参考图 ${image.name || index + 1}`}
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            ))}
+          <div className="pointer-events-none absolute right-1 bottom-full left-1 z-10 sm:right-0 sm:left-0">
+            <div className="pointer-events-auto mb-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mb-3 sm:flex-wrap sm:overflow-visible sm:pb-0">
+              {referenceImages.map((image, index) => (
+                <div key={`${image.name}-${index}`} className="relative size-14 shrink-0 sm:size-16">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLightboxIndex(index);
+                      setLightboxOpen(true);
+                    }}
+                    className="group size-14 overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 transition hover:border-stone-300 sm:size-16"
+                    aria-label={`预览参考图 ${image.name || index + 1}`}
+                  >
+                    <img
+                      src={image.dataUrl}
+                      alt={image.name || `参考图 ${index + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRemoveReferenceImage(index);
+                    }}
+                    className="absolute -right-1 -top-1 inline-flex size-5 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
+                    aria-label={`移除参考图 ${image.name || index + 1}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 
         <div
           className={cn(
-            "relative overflow-hidden rounded-[28px] bg-white shadow-[0_2px_4px_rgba(15,23,42,0.04),0_14px_24px_-6px_rgba(15,23,42,0.06),0_36px_56px_-16px_rgba(15,23,42,0.05),0_72px_96px_-32px_rgba(15,23,42,0.05)] transition sm:rounded-[32px]",
+            "relative overflow-hidden rounded-[28px] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_24px_rgba(15,23,42,0.08)] transition sm:rounded-[32px]",
             isDraggingOver && "ring-2 ring-stone-900/70 ring-offset-2 ring-offset-white",
           )}
           onDragEnter={handleDragEnter}

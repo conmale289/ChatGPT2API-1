@@ -65,6 +65,8 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     ...config,
     refresh_account_interval_minute: Number(config.refresh_account_interval_minute || 5),
     image_retention_days: Number(config.image_retention_days || 30),
+    cleanup_protect_gallery: Boolean(config.cleanup_protect_gallery ?? true),
+    cleanup_protect_user_images: Boolean(config.cleanup_protect_user_images ?? true),
     image_poll_timeout_secs: Number(config.image_poll_timeout_secs || 120),
     image_account_concurrency: Number(config.image_account_concurrency || 3),
     auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
@@ -151,6 +153,12 @@ type SettingsStore = {
   config: SettingsConfig | null;
   isLoadingConfig: boolean;
   isSavingConfig: boolean;
+  /**
+   * config 自上次成功 load / save 之后是否有改动。
+   * 任意 setXxx 都会置 true；loadConfig / saveConfig 成功后回 false。
+   * FloatingSaveBar 只有 isDirty=true 才浮现，干净状态下完全不占视觉位。
+   */
+  isDirty: boolean;
   backups: BackupItem[];
   backupState: BackupState | null;
   isLoadingBackups: boolean;
@@ -187,12 +195,16 @@ type SettingsStore = {
   initialize: () => Promise<void>;
   loadConfig: () => Promise<void>;
   saveConfig: () => Promise<boolean>;
+  /** 取消未保存修改：重新拉一次 config 把 dirty 打回去。 */
+  revertConfig: () => Promise<void>;
   loadBackups: (silent?: boolean) => Promise<void>;
   runBackup: () => Promise<void>;
   removeBackup: (key: string) => Promise<void>;
   testBackup: () => Promise<void>;
   setRefreshAccountIntervalMinute: (value: string) => void;
   setImageRetentionDays: (value: string) => void;
+  setCleanupProtectGallery: (value: boolean) => void;
+  setCleanupProtectUserImages: (value: boolean) => void;
   setImagePollTimeoutSecs: (value: string) => void;
   setImageAccountConcurrency: (value: string) => void;
   setAutoRemoveInvalidAccounts: (value: boolean) => void;
@@ -248,6 +260,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   config: null,
   isLoadingConfig: true,
   isSavingConfig: false,
+  isDirty: false,
   backups: [],
   backupState: null,
   isLoadingBackups: true,
@@ -308,8 +321,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     try {
       const data = await fetchSettingsConfig();
       const normalized = normalizeConfig(data.config);
+      // load 成功 = 当前内存 config 跟服务端一致，把 dirty 打回去
       set({
         config: normalized,
+        isDirty: false,
       });
     } catch (error) {
       if (!silent) {
@@ -319,6 +334,23 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       if (!silent) {
         set({ isLoadingConfig: false });
       }
+    }
+  },
+
+  /**
+   * 取消未保存修改：重新拉一次 config 覆盖内存值，把 dirty 打回去。
+   * 走 loadConfig 同款路径，silent 模式不打扰用户。
+   */
+  revertConfig: async () => {
+    set({ config: null });
+    try {
+      const data = await fetchSettingsConfig();
+      set({
+        config: normalizeConfig(data.config),
+        isDirty: false,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "撤销失败");
     }
   },
 
@@ -334,6 +366,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ...config,
         refresh_account_interval_minute: Math.max(1, Number(config.refresh_account_interval_minute) || 1),
         image_retention_days: Math.max(1, Number(config.image_retention_days) || 30),
+        cleanup_protect_gallery: Boolean(config.cleanup_protect_gallery ?? true),
+        cleanup_protect_user_images: Boolean(config.cleanup_protect_user_images ?? true),
         image_poll_timeout_secs: Math.max(1, Number(config.image_poll_timeout_secs) || 120),
         image_account_concurrency: Math.max(1, Number(config.image_account_concurrency) || 3),
         auto_remove_invalid_accounts: Boolean(config.auto_remove_invalid_accounts),
@@ -363,6 +397,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       });
       set({
         config: normalizeConfig(data.config),
+        isDirty: false,
       });
       toast.success("配置已保存");
       return true;
@@ -384,28 +419,37 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           ...state.config,
           refresh_account_interval_minute: value,
         },
+        isDirty: true,
       };
     });
   },
 
   setImageRetentionDays: (value) => {
-    set((state) => state.config ? { config: { ...state.config, image_retention_days: value } } : {});
+    set((state) => state.config ? { config: { ...state.config, image_retention_days: value }, isDirty: true } : {});
+  },
+
+  setCleanupProtectGallery: (value) => {
+    set((state) => state.config ? { config: { ...state.config, cleanup_protect_gallery: value }, isDirty: true } : {});
+  },
+
+  setCleanupProtectUserImages: (value) => {
+    set((state) => state.config ? { config: { ...state.config, cleanup_protect_user_images: value }, isDirty: true } : {});
   },
 
   setImagePollTimeoutSecs: (value) => {
-    set((state) => state.config ? { config: { ...state.config, image_poll_timeout_secs: value } } : {});
+    set((state) => state.config ? { config: { ...state.config, image_poll_timeout_secs: value }, isDirty: true } : {});
   },
 
   setImageAccountConcurrency: (value) => {
-    set((state) => state.config ? { config: { ...state.config, image_account_concurrency: value } } : {});
+    set((state) => state.config ? { config: { ...state.config, image_account_concurrency: value }, isDirty: true } : {});
   },
 
   setAutoRemoveInvalidAccounts: (value) => {
-    set((state) => state.config ? { config: { ...state.config, auto_remove_invalid_accounts: value } } : {});
+    set((state) => state.config ? { config: { ...state.config, auto_remove_invalid_accounts: value }, isDirty: true } : {});
   },
 
   setAutoRemoveRateLimitedAccounts: (value) => {
-    set((state) => state.config ? { config: { ...state.config, auto_remove_rate_limited_accounts: value } } : {});
+    set((state) => state.config ? { config: { ...state.config, auto_remove_rate_limited_accounts: value }, isDirty: true } : {});
   },
 
   setLogLevel: (level, enabled) => {
@@ -414,7 +458,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const levels = new Set(state.config.log_levels || []);
       if (enabled) levels.add(level);
       else levels.delete(level);
-      return { config: { ...state.config, log_levels: Array.from(levels) } };
+      return { config: { ...state.config, log_levels: Array.from(levels) }, isDirty: true };
     });
   },
 
@@ -428,6 +472,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           ...state.config,
           proxy: value,
         },
+        isDirty: true,
       };
     });
   },
@@ -442,20 +487,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           ...state.config,
           base_url: value,
         },
+        isDirty: true,
       };
     });
   },
 
   setGlobalSystemPrompt: (value) => {
-    set((state) => state.config ? { config: { ...state.config, global_system_prompt: value } } : {});
+    set((state) => state.config ? { config: { ...state.config, global_system_prompt: value }, isDirty: true } : {});
   },
 
   setSensitiveWordsText: (value) => {
-    set((state) => state.config ? { config: { ...state.config, sensitive_words: value.split("\n") } } : {});
+    set((state) => state.config ? { config: { ...state.config, sensitive_words: value.split("\n") }, isDirty: true } : {});
   },
 
   setAIReviewField: (key, value) => {
-    set((state) => state.config ? { config: { ...state.config, ai_review: { ...(state.config.ai_review || {}), [key]: value } } } : {});
+    set((state) => state.config ? { config: { ...state.config, ai_review: { ...(state.config.ai_review || {}), [key]: value } }, isDirty: true } : {});
   },
 
   setBackupField: (key, value) => {
@@ -471,6 +517,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             [key]: value,
           },
         },
+        isDirty: true,
       };
     });
   },
@@ -491,6 +538,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             },
           },
         },
+        isDirty: true,
       };
     });
   },

@@ -83,12 +83,10 @@ export function BackupSettingsCard() {
   const backups = useSettingsStore((state) => state.backups);
   const backupState = useSettingsStore((state) => state.backupState);
   const isLoadingConfig = useSettingsStore((state) => state.isLoadingConfig);
-  const isSavingConfig = useSettingsStore((state) => state.isSavingConfig);
   const isLoadingBackups = useSettingsStore((state) => state.isLoadingBackups);
   const isRunningBackup = useSettingsStore((state) => state.isRunningBackup);
   const deletingBackupKey = useSettingsStore((state) => state.deletingBackupKey);
   const isTestingBackup = useSettingsStore((state) => state.isTestingBackup);
-  const saveConfig = useSettingsStore((state) => state.saveConfig);
   const loadBackups = useSettingsStore((state) => state.loadBackups);
   const runBackup = useSettingsStore((state) => state.runBackup);
   const removeBackup = useSettingsStore((state) => state.removeBackup);
@@ -297,10 +295,7 @@ export function BackupSettingsCard() {
             {isRunningBackup || backupState?.running ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
             立即备份
           </Button>
-          <Button className="h-9 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800" onClick={() => void saveConfig()} disabled={isSavingConfig}>
-            {isSavingConfig ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
-            保存配置
-          </Button>
+          {/* 「保存配置」按钮已移到设置页底部 FloatingSaveBar，避免每张卡尾巴一个保存按钮带来的"我改了三张卡到底点哪个保存"困惑 */}
           </div>
 
           <div className="space-y-3">

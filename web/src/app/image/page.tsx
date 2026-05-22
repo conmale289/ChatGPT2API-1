@@ -5,7 +5,7 @@ import { History, Infinity as InfinityIcon, LoaderCircle, Plus, Trash2 } from "l
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
-import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
+import { ImageResults, type ImageLightboxItem, type ImagePublishState } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
 import {
@@ -24,6 +24,7 @@ import {
   fetchAccounts,
   fetchImageTasks,
   fetchMyIdentity,
+  publishGalleryItem,
   type Account,
   type ImageTask,
 } from "@/lib/api";
@@ -484,6 +485,63 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  // /works 页"用此图重画"会把 { rel, url, prompt } 写进 sessionStorage 然后跳过来。
+  // 这里 mount 时读一次：拉图 → 转 File + dataUrl → 塞参考图区，prompt 直接灌输入框。
+  // 读完立刻清掉 key，避免下次刷新页面又触发一次。
+  // 优先用 rel 拼 `/images/${rel}` 同源拉取，避开 item.url 是后端绝对地址跨源 fetch 撞 CORS
+  // (浏览器允许 <img> 跨源加载但拦 fetch，旧版直接传 url 会在这里报 "Failed to fetch")
+  // ---
+  // 不用 cancelled 守卫的原因：dev 模式 Strict Mode 会跑 effect 两次：
+  //   1) 首次：读到 payload，removeItem，启动 fetch
+  //   2) 首次 cleanup: cancelled=true
+  //   3) 二次：再读 sessionStorage 已为 null，直接 return（没新 fetch）
+  //   4) 首次 fetch 完成 → cancelled=true → 结果被丢弃，state 永远不设
+  // 现象就是"不报错也没图"。改用 ref 哨兵保证全局只消费一次，且不让 cleanup 阻断结果落盘。
+  const redrawHandoffConsumedRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (redrawHandoffConsumedRef.current) return;
+    redrawHandoffConsumedRef.current = true;
+    let raw: string | null = null;
+    try {
+      raw = window.sessionStorage.getItem("chatgpt2api:redraw_handoff");
+      if (raw) window.sessionStorage.removeItem("chatgpt2api:redraw_handoff");
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    let payload: { rel?: string; url?: string; prompt?: string } | null = null;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const rel = payload?.rel?.trim().replace(/^\/+/, "");
+    // 优先 rel → 同源 /images/<rel>，没有 rel 兜底 url（老 handoff 格式）
+    const sourceUrl = rel ? `/images/${rel}` : payload?.url?.trim();
+    if (!sourceUrl) return;
+
+    void (async () => {
+      try {
+        const file = await fetchImageAsFile(sourceUrl, `redraw-${Date.now()}.png`);
+        const dataUrl = await readFileAsDataUrl(file);
+        setReferenceImages((prev) => [
+          ...prev,
+          { name: file.name, type: file.type || "image/png", dataUrl },
+        ]);
+        setReferenceImageFiles((prev) => [...prev, file]);
+        // prompt 单独处理：可能为空（老数据 / 用户没填），有就灌进去，没有就留空让用户写
+        if (payload?.prompt && payload.prompt.trim()) {
+          setImagePrompt(payload.prompt);
+        }
+        toast.success("已加入参考图，调整描述后即可重画");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "读取参考图失败";
+        toast.error(message);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -986,6 +1044,94 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     [],
   );
 
+  // 单图发布到画廊的状态机：image.id → state。
+  // 用 Map<string, ImagePublishState> 而不是数组，O(1) 查询；
+  // 不持久化到 localforage，刷新页面回落"未发布"——是否发过让"画廊"页自己说了算，
+  // 这里只是一次会话内的视觉反馈避免重复点击。
+  const [publishStates, setPublishStates] = useState<Map<string, ImagePublishState>>(
+    () => new Map(),
+  );
+
+  const publishStateOf = useCallback(
+    (image: StoredImage): ImagePublishState => {
+      // 优先读已记录的状态；没有就按图本身能不能发判断：
+      //   - 有 url（http(s)）：可发，初始 idle
+      //   - 仅 b64_json：本地编辑产物 / 远端不可寻址，不能用 image_rel 主键 → unsupported
+      const recorded = publishStates.get(image.id);
+      if (recorded) return recorded;
+      if (image.url && /^https?:\/\//i.test(image.url)) return "idle";
+      return "unsupported";
+    },
+    [publishStates],
+  );
+
+  /**
+   * 从生成结果 url 抠出 image_rel：
+   *   http://host:8000/images/2026/05/21/xxx.png?t=123 → 2026/05/21/xxx.png
+   * 跟后端 image_owners.json / gallery_service 用同一份 rel 主键。
+   */
+  const extractImageRel = useCallback((url: string | undefined): string | null => {
+    if (!url) return null;
+    const marker = "/images/";
+    const idx = url.indexOf(marker);
+    if (idx < 0) return null;
+    const tail = url.substring(idx + marker.length);
+    const cut = tail.search(/[?#]/);
+    const rel = (cut >= 0 ? tail.substring(0, cut) : tail).replace(/^\/+/, "").trim();
+    return rel || null;
+  }, []);
+
+  const handlePublishImage = useCallback(
+    async (conversationId: string, turnId: string, image: StoredImage) => {
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      const turn = conversation?.turns.find((t) => t.id === turnId);
+      if (!conversation || !turn) return;
+
+      const rel = extractImageRel(image.url);
+      if (!rel) {
+        toast.error("当前图片无法发布到画廊");
+        setPublishStates((prev) => {
+          const next = new Map(prev);
+          next.set(image.id, "unsupported");
+          return next;
+        });
+        return;
+      }
+
+      // 进入 publishing：UI 上按钮转圈
+      setPublishStates((prev) => {
+        const next = new Map(prev);
+        next.set(image.id, "publishing");
+        return next;
+      });
+
+      try {
+        await publishGalleryItem({
+          image_rel: rel,
+          prompt: turn.prompt || "",
+          model: turn.model || "",
+          size: turn.size || "",
+        });
+        setPublishStates((prev) => {
+          const next = new Map(prev);
+          next.set(image.id, "published");
+          return next;
+        });
+        toast.success("已发布到画廊");
+      } catch (error) {
+        // 发布失败回滚成 idle，让用户能重试
+        setPublishStates((prev) => {
+          const next = new Map(prev);
+          next.set(image.id, "idle");
+          return next;
+        });
+        const message = error instanceof Error ? error.message : "发布失败";
+        toast.error(message);
+      }
+    },
+    [extractImageRel],
+  );
+
   // 模型反问/拒绝时点"回复"。把 AI 反问 + 上一轮 prompt 都收纳进 replyTarget，
   // 但不动输入框文本——用户写入框里的永远是他自己说的话。
   // 提交时由 handleSubmit / runConversationQueue 把这份上下文偷偷拼进发给模型的 prompt。
@@ -1415,14 +1561,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     await persistConversation(baseConversation);
     void runConversationQueue(conversationId);
 
-    const targetStats = getImageConversationStats(baseConversation);
-    if (targetStats.running > 0 || targetStats.queued > 1) {
-      toast.success("已加入当前对话队列");
-    } else if (!targetConversation) {
-      toast.success("已创建新对话并开始处理");
-    } else {
-      toast.success("已发送到当前对话");
-    }
+    // 不再弹"已发送 / 已创建 / 已加入队列"toast：
+    // 用户刚点了发送按钮，下方画布会立刻出现"处理中"占位卡，
+    // 状态变化已经可见，再弹一条 toast 反而打断节奏。
   };
 
   return (
@@ -1553,6 +1694,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                 onRegenerateTurn={handleRegenerateTurn}
                 onRetryImage={handleRetryImage}
                 onReplyToTurn={handleReplyToTurn}
+                onPublishImage={handlePublishImage}
+                publishStateOf={publishStateOf}
                 formatConversationTime={formatConversationTime}
               />
             )}

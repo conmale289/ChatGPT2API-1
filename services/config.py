@@ -181,6 +181,22 @@ class ConfigStore:
             return 30
 
     @property
+    def cleanup_protect_gallery(self) -> bool:
+        """清理图片时是否跳过画廊已发布条目。
+        默认 True：发布到画廊视为用户主动表示"这张图有保留价值"，
+        默删会让画廊瓦片瞬间变成裂图。
+        管理员可以在设置里关掉，回到"按 mtime 一刀切"的旧行为。"""
+        return bool(self.data.get("cleanup_protect_gallery", True))
+
+    @property
+    def cleanup_protect_user_images(self) -> bool:
+        """清理图片时是否跳过 image_owners 里有归属的图（用户「我的作品」）。
+        默认 True：用户在「我的作品」里看到一张图突然消失体感比较糟。
+        匿名 / admin 生成且没归属的图不受这个开关保护，仍然按 mtime 清。
+        管理员可以关掉以释放存储。"""
+        return bool(self.data.get("cleanup_protect_user_images", True))
+
+    @property
     def image_poll_timeout_secs(self) -> int:
         try:
             return max(1, int(self.data.get("image_poll_timeout_secs", 120)))
@@ -244,11 +260,50 @@ class ConfigStore:
 
     def cleanup_old_images(self) -> int:
         cutoff = time.time() - self.image_retention_days * 86400
+        # 收集白名单 rel：开关命中才查，避免无开关时也走两次磁盘 IO
+        protected: set[str] = set()
+        if self.cleanup_protect_gallery:
+            try:
+                # 延迟 import 避免 services 间循环引用（gallery_service → config）
+                from services.gallery_service import _load_all as _load_gallery_all
+                for it in _load_gallery_all():
+                    rel = (it.get("image_rel") or "").strip().lstrip("/")
+                    if rel:
+                        protected.add(rel)
+            except Exception:
+                # 加载失败时按"宁可保守"原则——这一轮不删任何文件，等下次清理
+                # 总好过把已发布画廊条目的 PNG 删掉造成 404
+                return 0
+        if self.cleanup_protect_user_images:
+            try:
+                from services.image_owners_service import load_owners
+                owners = load_owners()
+                for rel, owner in owners.items():
+                    rel_clean = (rel or "").strip().lstrip("/")
+                    owner_clean = (owner or "").strip().lower()
+                    # admin / 匿名归属（空字符串）不算"用户作品"，仍按 mtime 清
+                    if rel_clean and owner_clean and owner_clean != "admin" and owner_clean != "__admin__":
+                        protected.add(rel_clean)
+            except Exception:
+                return 0
+
         removed = 0
-        for path in self.images_dir.rglob("*"):
-            if path.is_file() and path.stat().st_mtime < cutoff:
-                path.unlink()
-                removed += 1
+        images_root = self.images_dir
+        for path in images_root.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.stat().st_mtime >= cutoff:
+                continue
+            if protected:
+                # rel = 相对 images_dir 的 posix 路径，跟 image_rel 落库格式一致
+                try:
+                    rel = path.relative_to(images_root).as_posix()
+                except ValueError:
+                    rel = ""
+                if rel and rel in protected:
+                    continue
+            path.unlink()
+            removed += 1
         for path in sorted((p for p in self.images_dir.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
             try:
                 path.rmdir()
@@ -276,6 +331,8 @@ class ConfigStore:
         data = dict(self.data)
         data["refresh_account_interval_minute"] = self.refresh_account_interval_minute
         data["image_retention_days"] = self.image_retention_days
+        data["cleanup_protect_gallery"] = self.cleanup_protect_gallery
+        data["cleanup_protect_user_images"] = self.cleanup_protect_user_images
         data["image_poll_timeout_secs"] = self.image_poll_timeout_secs
         data["image_account_concurrency"] = self.image_account_concurrency
         data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts

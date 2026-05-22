@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ImageIcon, LoaderCircle, Maximize2, Plus, RefreshCw, Search, Tag, Trash2, User, X } from "lucide-react";
+import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ImageIcon, LoaderCircle, Maximize2, Plus, RefreshCw, Search, Share2, Tag, Trash2, User, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { DateRangeFilter } from "@/components/date-range-filter";
@@ -10,10 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { deleteImageTag, deleteManagedImages, downloadImages, downloadSingleImage, fetchImageOwners, fetchImageTags, fetchManagedImages, setImageTags, type ImageOwner, type ManagedImage } from "@/lib/api";
+import { deleteImageTag, deleteManagedImages, downloadImages, downloadSingleImage, fetchImageOwners, fetchImageTags, fetchManagedImages, getMyPublishedBatch, publishGalleryItem, setImageTags, type ImageOwner, type ManagedImage } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 const LONG_PRESS_MS = 800;
@@ -277,6 +277,20 @@ function ImageManagerContent() {
   const [deleteMode, setDeleteMode] = useState<"selected" | "filtered" | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // 发布画廊状态：rel → "publishing" | "published"。
+  // admin 视角下未必由当前账号发的，被任何用户发过都标"已发布"，
+  // 后端 batch 接口在 admin 请求时自动按 check_any_publisher=True 跨用户查。
+  const [publishStates, setPublishStates] = useState<Map<string, "publishing" | "published">>(
+    () => new Map(),
+  );
+  // 发布者展示名：rel → publisher_name。仅用于已发布角标 tooltip 显示"由 xx 发布"，
+  // 帮 admin 在管理页快速辨认是谁发的。
+  const [publisherNames, setPublisherNames] = useState<Map<string, string>>(() => new Map());
+  // 没 prompt 时弹窗手填，复用 works 页同款模式
+  const [pendingPublish, setPendingPublish] = useState<ManagedImage | null>(null);
+  const [promptDraft, setPromptDraft] = useState("");
+  const [publishingDialog, setPublishingDialog] = useState(false);
+
   // 写 items / allTags 同步刷新缓存，下次切回拿到最新值。
   // 同时支持值与 functional updater 两种形式（旧代码大量用 setItems(prev => ...)）。
   const setItems = useCallback(
@@ -373,6 +387,33 @@ function ImageManagerContent() {
       setOwners(ownersData.items);
       setSelectedPaths((current) => current.filter((path) => data.items.some((item) => imageKey(item) === path)));
       setPage(1);
+      // 播种发布状态：admin 视角下后端会跨用户返回所有已发布的 rel。
+      // 不阻塞主流程；失败静默，下次 reload 再试。
+      const rels = data.items.map((it) => it.rel).filter(Boolean);
+      if (rels.length > 0) {
+        try {
+          const { items: published } = await getMyPublishedBatch(rels);
+          setPublishStates((prev) => {
+            const next = new Map(prev);
+            // 先清掉这一批 rel 的旧状态再写新状态——避免别人撤回了角标还残留
+            for (const rel of rels) next.delete(rel);
+            for (const [rel, info] of Object.entries(published)) {
+              if (info.published) next.set(rel, "published");
+            }
+            return next;
+          });
+          setPublisherNames((prev) => {
+            const next = new Map(prev);
+            for (const rel of rels) next.delete(rel);
+            for (const [rel, info] of Object.entries(published)) {
+              if (info.publisher_name) next.set(rel, info.publisher_name);
+            }
+            return next;
+          });
+        } catch {
+          // 静默：拉不到发布状态不阻塞列表
+        }
+      }
     } catch (error) {
       if (!silent) toast.error(error instanceof Error ? error.message : "加载图片失败");
     } finally {
@@ -384,6 +425,69 @@ function ImageManagerContent() {
     setDialogVisible(false);
     setTimeout(() => setDeleteTarget(null), 200);
   }, []);
+
+  /**
+   * 发布到画廊。admin 代发任意用户的图，后端 publish 路由对 admin 跳过 owner 校验。
+   *  - 已有 prompt：直接 publish，过敏感词 → 成功 → 给绿对勾视觉
+   *  - 没有 prompt：弹个对话框让 admin 手填（可留空），提交时再 publish
+   */
+  const handlePublish = useCallback(
+    async (item: ManagedImage, promptOverride?: string) => {
+      const rel = item.rel;
+      if (!rel) {
+        toast.error("当前图片无法发布");
+        return;
+      }
+      let prompt: string;
+      if (promptOverride !== undefined) {
+        prompt = promptOverride.trim();
+      } else {
+        prompt = (item.prompt ?? "").trim();
+        if (!prompt) {
+          // 卡片自身没 prompt → 弹窗让 admin 决定补不补（留空也能发）
+          setPendingPublish(item);
+          setPromptDraft("");
+          return;
+        }
+      }
+      setPublishStates((prev) => new Map(prev).set(rel, "publishing"));
+      try {
+        await publishGalleryItem({
+          image_rel: rel,
+          prompt,
+          model: "",
+          size: "",
+          width: item.width || 0,
+          height: item.height || 0,
+        });
+        setPublishStates((prev) => new Map(prev).set(rel, "published"));
+        toast.success("已发布到画廊");
+      } catch (error) {
+        // 失败回滚状态让用户可重试
+        setPublishStates((prev) => {
+          const next = new Map(prev);
+          next.delete(rel);
+          return next;
+        });
+        const message = error instanceof Error ? error.message : "发布失败";
+        toast.error(message);
+      }
+    },
+    [],
+  );
+
+  const handleConfirmPendingPublish = useCallback(async () => {
+    if (!pendingPublish) return;
+    const text = promptDraft.trim();
+    setPublishingDialog(true);
+    try {
+      await handlePublish(pendingPublish, text);
+      setPendingPublish(null);
+      setPromptDraft("");
+    } finally {
+      setPublishingDialog(false);
+    }
+  }, [handlePublish, pendingPublish, promptDraft]);
 
   const openDeleteDialog = useCallback((item: ManagedImage) => {
     deleteTargetRef.current = item;
@@ -656,6 +760,8 @@ function ImageManagerContent() {
           <div className="grid gap-0 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
             {currentRows.map((item) => {
               const imageIndex = filteredItems.findIndex((row) => row.url === item.url);
+              const publishState = publishStates.get(item.rel);
+              const publishedBy = publisherNames.get(item.rel);
               return (
               <div key={item.rel} className="group border-r border-b border-stone-100 p-4 transition hover:bg-stone-50">
                 <div className="relative">
@@ -681,6 +787,17 @@ function ImageManagerContent() {
                       <Maximize2 className="size-4" />
                     </span>
                   </button>
+                  {/* 左上"已发布"角标：只要这张图被任何人发布过画廊就显示。
+                      tooltip 注明发布者名（admin 视角下后端会附带 publisher_name），
+                      帮 admin 快速辨认是谁发的；普通登录态进不来这页。 */}
+                  {publishState === "published" ? (
+                    <div
+                      className="absolute top-2 left-2 z-10 rounded-md bg-emerald-500/95 px-2 py-1 text-[10.5px] font-semibold text-white shadow-sm"
+                      title={publishedBy ? `由 ${publishedBy} 发布` : "已发布到画廊"}
+                    >
+                      已发布
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     className="absolute top-2 right-2 z-10 inline-flex size-7 items-center justify-center rounded-full bg-black/50 text-white opacity-100 transition hover:bg-red-600 sm:opacity-0 sm:group-hover:opacity-100"
@@ -702,6 +819,35 @@ function ImageManagerContent() {
                       </span>
                     </div>
                     <div className="flex items-center gap-1">
+                      {/* 发布到画廊：已发布时变 emerald 实色不可再点；publishing 转圈。
+                          stopPropagation 防止冒泡触发卡片大图。 */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={`size-8 rounded-lg ${
+                          publishState === "published"
+                            ? "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                            : "text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handlePublish(item);
+                        }}
+                        disabled={publishState === "publishing" || publishState === "published"}
+                        title={
+                          publishState === "published"
+                            ? publishedBy
+                              ? `已发布到画廊（${publishedBy}）`
+                              : "已发布到画廊"
+                            : "发布到画廊"
+                        }
+                      >
+                        {publishState === "publishing" ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <Share2 className="size-4" />
+                        )}
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -916,6 +1062,74 @@ function ImageManagerContent() {
               }}
             >
               确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 发布到画廊：当图片自身没保留 prompt（早期生成 / 图生图无文本）时
+          弹这个对话框让 admin 决定补不补。允许留空——后端 publish 已支持空 prompt。 */}
+      <Dialog
+        open={Boolean(pendingPublish)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingPublish(null);
+            setPromptDraft("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>发布到画廊</DialogTitle>
+            <DialogDescription className="text-stone-500">
+              此图未保留生成时的 prompt，可以补一段描述，或直接留空发布。
+            </DialogDescription>
+          </DialogHeader>
+          {pendingPublish ? (
+            <div className="flex items-center gap-3 overflow-hidden rounded-xl border border-stone-200 bg-stone-50 p-3">
+              <img
+                src={pendingPublish.thumbnail_url || pendingPublish.url}
+                alt=""
+                className="size-16 shrink-0 rounded-lg object-cover"
+                onError={(e) => { if (e.currentTarget.src !== pendingPublish.url) e.currentTarget.src = pendingPublish.url; }}
+              />
+              <div className="min-w-0 overflow-hidden text-xs text-stone-500">
+                <div className="truncate font-medium text-stone-700">{pendingPublish.name}</div>
+                <div className="truncate">{pendingPublish.created_at}</div>
+              </div>
+            </div>
+          ) : null}
+          <Input
+            value={promptDraft}
+            onChange={(e) => setPromptDraft(e.target.value)}
+            placeholder="可选：为这张图补一段 prompt"
+            className="h-10 rounded-xl"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !publishingDialog) {
+                e.preventDefault();
+                void handleConfirmPendingPublish();
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="rounded-xl"
+              onClick={() => {
+                setPendingPublish(null);
+                setPromptDraft("");
+              }}
+              disabled={publishingDialog}
+            >
+              取消
+            </Button>
+            <Button
+              className="rounded-xl bg-stone-950 text-white hover:bg-stone-800"
+              onClick={() => void handleConfirmPendingPublish()}
+              disabled={publishingDialog}
+            >
+              {publishingDialog ? <LoaderCircle className="size-4 animate-spin" /> : <Share2 className="size-4" />}
+              发布
             </Button>
           </DialogFooter>
         </DialogContent>

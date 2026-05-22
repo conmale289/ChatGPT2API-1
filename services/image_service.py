@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 
 from services.config import config
 from services.image_owners_service import load_owners, remove_owners
+from services.image_prompts_service import load_prompts, remove_prompts
 from services.image_tags_service import load_tags, remove_tags
 
 THUMBNAIL_SIZE = (320, 320)
@@ -173,6 +174,7 @@ def list_images(
     cleanup_image_thumbnails()
     all_tags = load_tags()
     owners_map = load_owners()
+    prompts_map = load_prompts()
     admin_set = admin_ids or set()
     items = []
     for item in _image_items(start_date, end_date, owner, admin_set):
@@ -186,6 +188,9 @@ def list_images(
             "owner_id": owner_id,
             # 标记给前端：admin 桶里的图都用同一种 badge 文案"管理员"，不暴露具体 admin id
             "is_admin_owner": bool(owner_id) and owner_id in admin_set,
+            # 生成时记下来的 prompt 原文。老数据没记录就空字符串。
+            # web "我的作品"页据此一键复用 / 发布画廊；为空时让前端弹窗手填。
+            "prompt": prompts_map.get(rel, ""),
         })
     groups: dict[str, list[dict[str, object]]] = {}
     for item in items:
@@ -225,6 +230,7 @@ def delete_images(
             removed += 1
     if cleared_rels:
         remove_owners(cleared_rels)
+        remove_prompts(cleared_rels)
     _cleanup_empty_dirs(root)
     _cleanup_empty_dirs(config.image_thumbnails_dir)
     return {"removed": removed}

@@ -6,7 +6,6 @@
   "auto_remove_rate_limited_accounts": false,
   "auto_remove_invalid_accounts": true,
   "log_levels": [
-    "debug",
     "error",
     "info",
     "warning"

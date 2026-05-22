@@ -11,6 +11,7 @@ import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 
 const adminNavItems = [
   { href: "/image", label: "画图" },
+  { href: "/gallery", label: "画廊" },
   { href: "/accounts", label: "号池管理" },
   { href: "/register", label: "注册机" },
   { href: "/image-manager", label: "图片管理" },
@@ -18,7 +19,11 @@ const adminNavItems = [
   { href: "/settings", label: "设置" },
 ];
 
-const userNavItems = [{ href: "/image", label: "画图" }];
+const userNavItems = [
+  { href: "/image", label: "画图" },
+  { href: "/works", label: "我的作品" },
+  { href: "/gallery", label: "画廊" },
+];
 
 // next.config.ts 配了 trailingSlash: true，usePathname 返回 "/image/"，
 // nav item 的 href 是 "/image"，直接 === 永远不命中。统一抹掉尾斜杠再比。

@@ -28,6 +28,16 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
+    def load_gallery_items(self) -> list[dict[str, Any]]:
+        """加载所有画廊条目"""
+        pass
+
+    @abstractmethod
+    def save_gallery_items(self, items: list[dict[str, Any]]) -> None:
+        """保存所有画廊条目"""
+        pass
+
+    @abstractmethod
     def health_check(self) -> dict[str, Any]:
         """健康检查，返回存储后端状态"""
         pass

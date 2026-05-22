@@ -4,9 +4,10 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.support import consume_user_quota, require_identity, resolve_image_base_url
+from api.support import consume_user_quota, refund_user_quota, require_identity, resolve_image_base_url
 from services.content_filter import check_request, request_text
 from services.image_owners_service import record_owner_for_result
+from services.image_prompts_service import record_prompt_for_result
 from services.log_service import LoggedCall
 from services.protocol import (
     anthropic_v1_messages,
@@ -82,15 +83,24 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         # /v1 入口按 n 整体扣，1 次提交 = n 张。失败直接 402，不进 call.run。
-        consume_user_quota(identity, max(1, int(body.n or 1)))
+        n = max(1, int(body.n or 1))
+        consume_user_quota(identity, n)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
-        call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
+        # 上游真失败时把扣的 n 退回去——LoggedCall.run / stream 内部失败分支会自动回调。
+        # 这里 capture identity，failure_refund_amount 跟入口扣的金额一致。
+        call = LoggedCall(
+            identity, "/v1/images/generations", body.model, "文生图",
+            request_text=body.prompt,
+            on_failure=lambda amount: refund_user_quota(identity, amount),
+            failure_refund_amount=n,
+        )
         await filter_or_log(call, body.prompt)
         result = await call.run(openai_v1_image_generations.handle, payload)
         # 对接 dict 返回时把图片归属也写一下；StreamingResponse 不动。
         if isinstance(result, dict):
             record_owner_for_result(identity, result.get("data"))
+            record_prompt_for_result(body.prompt, result.get("data"))
         return result
 
     @router.post("/v1/images/edits")
@@ -107,19 +117,28 @@ def create_router() -> APIRouter:
             stream: bool | None = Form(default=None),
     ):
         identity = require_identity(authorization)
-        call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
         # 同样按 n 整体扣，校验过 n 范围之后再扣，避免无效请求也被记账。
-        consume_user_quota(identity, max(1, int(n)))
+        effective_n = max(1, int(n))
+        consume_user_quota(identity, effective_n)
+        call = LoggedCall(
+            identity, "/v1/images/edits", model, "图生图",
+            request_text=prompt,
+            on_failure=lambda amount: refund_user_quota(identity, amount),
+            failure_refund_amount=effective_n,
+        )
         await filter_or_log(call, prompt)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
+            # 已扣的退掉——参数错误本质是 fail-fast，不该让用户白扣
+            refund_user_quota(identity, effective_n)
             raise HTTPException(status_code=400, detail={"error": "image file is required"})
         images: list[tuple[bytes, str, str]] = []
         for upload in uploads:
             image_data = await upload.read()
             if not image_data:
+                refund_user_quota(identity, effective_n)
                 raise HTTPException(status_code=400, detail={"error": "image file is empty"})
             images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
         payload = {
@@ -135,6 +154,9 @@ def create_router() -> APIRouter:
         result = await call.run(openai_v1_image_edit.handle, payload)
         if isinstance(result, dict):
             record_owner_for_result(identity, result.get("data"))
+            # 图生图：标 is_edit=True，画廊发布时会把 prompt 强制落空，
+            # 因为离开参考图后这段修改指令对其它用户毫无复用价值。
+            record_prompt_for_result(prompt, result.get("data"), is_edit=True)
         return result
 
     @router.post("/v1/chat/completions")

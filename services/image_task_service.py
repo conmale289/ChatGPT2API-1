@@ -11,6 +11,7 @@ from typing import Any
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
 from services.image_owners_service import record_owner_for_result
+from services.image_prompts_service import record_prompt_for_result
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 
@@ -182,6 +183,9 @@ class ImageTaskService:
         - queued: 直接置为 canceled，工作线程启动时会发现并跳过实际请求
         - running: 置为 canceled，工作线程会在请求结束后丢弃结果而不写入
         - 终态(success/error/canceled): 不动
+
+        每条真正被取消（queued / running 翻 canceled）的任务都退还 1 张入口预扣额度。
+        终态条目不退——success 已经出图了不能扣回去，error/canceled 已经退过了。
         """
         owner = _owner_id(identity)
         requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]
@@ -204,7 +208,27 @@ class ImageTaskService:
                 canceled.append(task_id)
             if canceled:
                 self._save_locked()
+        # 退款放到锁外做：DataStore / DB 写盘期间不持有 self._lock，
+        # 避免与 _run_task 失败分支同时拿锁形成竞态。
+        for _ in canceled:
+            self._refund_one(identity)
         return {"canceled": canceled, "skipped": skipped, "missing_ids": missing_ids}
+
+    def _refund_one(self, identity: dict[str, object]) -> None:
+        """退还 1 张入口预扣额度。
+        admin / unlimited / 匿名身份内部 noop；普通用户的 used 减 1 不会跌破 0。
+        所有异常吞掉——退款失败不该影响主流程的错误响应。
+        """
+        role = str(identity.get("role") or "").strip().lower()
+        item_id = str(identity.get("id") or "").strip()
+        if role == "admin" or not item_id or item_id == "admin":
+            return
+        try:
+            # 延迟 import 避免 services 间循环引用
+            from services.auth_service import auth_service
+            auth_service.refund_quota(item_id, 1)
+        except Exception:
+            pass
 
     def _submit(
         self,
@@ -286,6 +310,12 @@ class ImageTaskService:
             # 任务真正成功后再写归属表，避免给失败的临时落盘也挂上 owner。
             # admin / 匿名身份不写，由 record_owner_for_result 内部判断。
             record_owner_for_result(identity, data)
+            # prompt 文本同步写一份，给"我的作品"页 / 画廊发布功能复用。
+            # mode=="edit" 时标记为图生图，画廊发布时会自动把 prompt 落空——
+            # 图生图的 prompt 是相对参考图的指令，离开参考图对外人没复用价值。
+            record_prompt_for_result(
+                payload.get("prompt"), data, is_edit=(mode == "edit")
+            )
             self._log_call(
                 identity,
                 mode,
@@ -303,6 +333,9 @@ class ImageTaskService:
                     return
             error_message = str(exc) or "image task failed"
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
+            # 上游真失败：退还入口预扣的 1 张额度。
+            # admin / unlimited 在 _refund_one 内部 noop；普通用户的 used 减 1 不会跌破 0。
+            self._refund_one(identity)
             self._log_call(
                 identity,
                 mode,

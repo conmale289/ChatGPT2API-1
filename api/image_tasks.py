@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from api.support import consume_user_quota, require_identity, resolve_image_base_url
+from api.support import consume_user_quota, refund_user_quota, require_identity, resolve_image_base_url
 from services.content_filter import check_request
 from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
@@ -63,8 +63,9 @@ def create_router() -> APIRouter:
         # 前端每张图独立提交一次任务，按 1 扣；额度不足直接 402，
         # 不要等 submit_generation 跑完才发现没额度。
         consume_user_quota(identity, 1)
-        await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
+        # 后续任意 fail-fast 路径都要把这 1 张退掉，避免参数错误也白扣
         try:
+            await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
             return await run_in_threadpool(
                 image_task_service.submit_generation,
                 identity,
@@ -75,7 +76,14 @@ def create_router() -> APIRouter:
                 base_url=resolve_image_base_url(request),
             )
         except ValueError as exc:
+            refund_user_quota(identity, 1)
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        except HTTPException:
+            # filter_or_log / submit_generation 抛出的 HTTPException：
+            # 内容审查 / 上游号池忙 / 参数错都属于"还没真发请求就失败"，应退款。
+            # _run_task 异步路径的失败由 image_task_service._refund_one 自己退，不在这条链路里。
+            refund_user_quota(identity, 1)
+            raise
 
     @router.post("/api/image-tasks/edits")
     async def create_edit_task(
@@ -91,17 +99,17 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         # 同样按 1 张扣；前端会拆成多次提交，所以这里不需要乘以 n。
         consume_user_quota(identity, 1)
-        await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
-        uploads = [*(image or []), *(image_list or [])]
-        if not uploads:
-            raise HTTPException(status_code=400, detail={"error": "image file is required"})
-        images: list[tuple[bytes, str, str]] = []
-        for upload in uploads:
-            image_data = await upload.read()
-            if not image_data:
-                raise HTTPException(status_code=400, detail={"error": "image file is empty"})
-            images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
         try:
+            await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
+            uploads = [*(image or []), *(image_list or [])]
+            if not uploads:
+                raise HTTPException(status_code=400, detail={"error": "image file is required"})
+            images: list[tuple[bytes, str, str]] = []
+            for upload in uploads:
+                image_data = await upload.read()
+                if not image_data:
+                    raise HTTPException(status_code=400, detail={"error": "image file is empty"})
+                images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
             return await run_in_threadpool(
                 image_task_service.submit_edit,
                 identity,
@@ -113,6 +121,10 @@ def create_router() -> APIRouter:
                 images=images,
             )
         except ValueError as exc:
+            refund_user_quota(identity, 1)
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        except HTTPException:
+            refund_user_quota(identity, 1)
+            raise
 
     return router

@@ -301,6 +301,48 @@ class AuthService:
                 }
         return {"ok": False, "remaining": 0, "unlimited": False, "reason": "密钥不存在"}
 
+    def refund_quota(self, key_id: str, amount: int) -> dict[str, object]:
+        """退还用户密钥额度。语义跟 [consume_quota] 对称：
+        admin / unlimited 直接 noop；其它用户 used 减去 amount 但不会跌破 0。
+
+        用途：图片生成上游真实失败（content_policy / 5xx / 上游超时）时，
+        把入口预扣的额度退回去，让用户体感是"真生成了才扣"。
+        持久化失败回滚内存，跟 consume_quota 同样的失败处理。
+        """
+        normalized_id = self._clean(key_id)
+        delta = max(0, int(amount or 0))
+        if not normalized_id or delta == 0:
+            return {"ok": True, "remaining": None, "unlimited": True, "reason": ""}
+        with self._lock:
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                role = str(item.get("role") or "").strip().lower()
+                if role == "admin" or bool(item.get("unlimited", False)):
+                    return {"ok": True, "remaining": None, "unlimited": True, "reason": ""}
+                quota = self._coerce_int(item.get("quota"), 0)
+                used = self._coerce_int(item.get("used"), 0)
+                if used <= 0:
+                    # 没扣过就别退——避免某些 race 让 used 变负数
+                    return {"ok": True, "remaining": max(0, quota - used), "unlimited": False, "reason": ""}
+                next_item = dict(item)
+                # 不会跌破 0：上游返多次失败回调时退超量也只到 0 为止
+                next_item["used"] = max(0, used - delta)
+                self._items[index] = next_item
+                try:
+                    self._save()
+                except Exception:
+                    # 持久化失败时回滚内存，避免数字飘
+                    self._items[index] = item
+                    raise
+                return {
+                    "ok": True,
+                    "remaining": max(0, quota - next_item["used"]),
+                    "unlimited": False,
+                    "reason": "",
+                }
+        return {"ok": False, "remaining": 0, "unlimited": False, "reason": "密钥不存在"}
+
     def delete_key(self, key_id: str, *, role: AuthRole | None = None) -> bool:
         normalized_id = self._clean(key_id)
         if not normalized_id:
