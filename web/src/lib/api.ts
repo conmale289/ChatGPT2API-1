@@ -224,6 +224,8 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  // 后端是否仍持有原文密钥；老数据只存 key_hash 时为 false，前端据此切到"重置后回显"流程。
+  key_visible: boolean;
   image_daily_quota: number;
   image_daily_used: number;
   image_daily_unlimited: boolean;
@@ -618,6 +620,7 @@ export async function fetchMyIdentity() {
 
 export type UserKeyCreatePayload = {
   name?: string;
+  key?: string;
   image_daily_quota?: number;
   image_daily_unlimited?: boolean;
   image_monthly_quota?: number;
@@ -661,6 +664,7 @@ export async function createUserKey(payload: UserKeyCreatePayload) {
     method: "POST",
     body: {
       name: payload.name ?? "",
+      ...(payload.key ? { key: payload.key } : {}),
       image_daily_quota: Math.max(0, Number(payload.image_daily_quota ?? 0) || 0),
       image_daily_unlimited: payload.image_daily_unlimited ?? true,
       image_monthly_quota: Math.max(0, Number(payload.image_monthly_quota ?? 0) || 0),
@@ -688,6 +692,17 @@ export async function deleteUserKey(keyId: string) {
   return httpRequest<{ items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "DELETE",
   });
+}
+
+export async function fetchUserKeyPlaintext(keyId: string) {
+  return httpRequest<{ key: string; key_visible: boolean }>(`/api/auth/users/${keyId}/key`);
+}
+
+export async function regenerateUserKey(keyId: string, customKey?: string) {
+  return httpRequest<{ item: UserKey; key: string; items: UserKey[] }>(
+    `/api/auth/users/${keyId}/regenerate`,
+    { method: "POST", body: { key: customKey ?? "" } },
+  );
 }
 
 export async function fetchRegisterConfig() {

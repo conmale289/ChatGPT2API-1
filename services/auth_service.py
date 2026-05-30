@@ -101,6 +101,9 @@ class AuthService:
         name = self._clean(raw.get("name")) or self._default_name(role)
         created_at = self._clean(raw.get("created_at")) or _now_iso()
         last_used_at = self._clean(raw.get("last_used_at")) or None
+        # 仅 user 角色保留明文，给 admin 后台"查看 / 复制密钥"用；admin 角色靠 config.auth_key 鉴权，
+        # 不应再额外落明文，统一过滤掉。
+        key_plain = self._clean(raw.get("key")) if role == "user" else ""
 
         # 画图三档迁移规则：
         #   - 已经有 image_total_quota 字段：当前格式，原样读取。
@@ -172,6 +175,7 @@ class AuthService:
             "name": name,
             "role": role,
             "key_hash": key_hash,
+            "key": key_plain,
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
@@ -244,6 +248,8 @@ class AuthService:
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
+            # 仅暴露"是否可被 admin 回显"，原文要走专门的 get_raw_key 单独取。
+            "key_visible": bool(item.get("role") == "user" and cls._clean(item.get("key"))),
         }
         for kind in (*_IMAGE_KINDS, *_CHAT_KINDS):
             quota = cls._coerce_int(item.get(f"{kind}_quota"), 0)
@@ -333,6 +339,7 @@ class AuthService:
         *,
         role: AuthRole,
         name: str = "",
+        key: str = "",
         image_daily_quota: int = 0,
         image_daily_unlimited: bool = True,
         image_monthly_quota: int = 0,
@@ -349,19 +356,27 @@ class AuthService:
         with self._lock:
             self._reload_locked()
             normalized_name = self._build_name_locked(name, role=role)
-            while True:
-                raw_key = f"sk-{secrets.token_urlsafe(24)}"
-                try:
-                    key_hash = self._build_key_hash_locked(raw_key)
-                    break
-                except ValueError:
-                    continue
+            custom_key = self._clean(key)
+            if custom_key:
+                # 自定义密钥走和"编辑里换 key"同一套校验：非空、不与管理员密钥冲突、不与其他用户重复。
+                key_hash = self._build_key_hash_locked(custom_key)
+                raw_key = custom_key
+            else:
+                while True:
+                    raw_key = f"sk-{secrets.token_urlsafe(24)}"
+                    try:
+                        key_hash = self._build_key_hash_locked(raw_key)
+                        break
+                    except ValueError:
+                        continue
             is_admin = role == "admin"
             item = {
                 "id": uuid.uuid4().hex[:12],
                 "name": normalized_name,
                 "role": role,
                 "key_hash": key_hash,
+                # admin 不落明文：admin 鉴权走 config.auth_key，不通过 auth_keys.json。
+                "key": "" if is_admin else raw_key,
                 "enabled": True,
                 "created_at": _now_iso(),
                 "last_used_at": None,
@@ -420,7 +435,9 @@ class AuthService:
                 if "enabled" in updates and updates.get("enabled") is not None:
                     next_item["enabled"] = bool(updates.get("enabled"))
                 if "key" in updates and updates.get("key") is not None:
-                    next_item["key_hash"] = self._build_key_hash_locked(str(updates.get("key") or ""), exclude_id=normalized_id)
+                    raw_candidate = self._clean(str(updates.get("key") or ""))
+                    next_item["key_hash"] = self._build_key_hash_locked(raw_candidate, exclude_id=normalized_id)
+                    next_item["key"] = "" if next_role == "admin" else raw_candidate
                 if next_role == "user":
                     self._apply_quota_updates_locked(next_item, updates)
                 else:
@@ -606,6 +623,61 @@ class AuthService:
         normalized_id = self._clean(key_id)
         with self._lock:
             return self._refund_kinds_locked(normalized_id, amount, _CHAT_KINDS)
+
+    def reveal_key(self, key_id: str, *, role: AuthRole | None = None) -> dict[str, object] | None:
+        """给 admin 后台读取明文密钥；只对 user 角色有效。
+        返回 {"key": str, "key_visible": bool}：旧数据未落明文时 key_visible=False，
+        前端据此提示 admin 走"重置密钥"流程。"""
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for item in self._items:
+                if item.get("id") != normalized_id:
+                    continue
+                if role is not None and item.get("role") != role:
+                    return None
+                if str(item.get("role") or "").strip().lower() != "user":
+                    return None
+                plain = self._clean(item.get("key"))
+                return {"key": plain, "key_visible": bool(plain)}
+        return None
+
+    def regenerate_key(self, key_id: str, *, role: AuthRole | None = None, key: str = "") -> tuple[dict[str, object], str] | None:
+        """给老数据"重置后回显"用：换新密钥（落明文 + 哈希），旧密钥立即失效。
+        admin 角色不允许走这条路径。传入 key 则使用自定义值，否则自动生成。"""
+        normalized_id = self._clean(key_id)
+        if not normalized_id:
+            return None
+        with self._lock:
+            self._reload_locked()
+            for index, item in enumerate(self._items):
+                if item.get("id") != normalized_id:
+                    continue
+                if role is not None and item.get("role") != role:
+                    return None
+                if str(item.get("role") or "").strip().lower() != "user":
+                    return None
+                custom_key = self._clean(key)
+                if custom_key:
+                    key_hash = self._build_key_hash_locked(custom_key, exclude_id=normalized_id)
+                    raw_key = custom_key
+                else:
+                    while True:
+                        raw_key = f"sk-{secrets.token_urlsafe(24)}"
+                        try:
+                            key_hash = self._build_key_hash_locked(raw_key, exclude_id=normalized_id)
+                            break
+                        except ValueError:
+                            continue
+                next_item = dict(item)
+                next_item["key_hash"] = key_hash
+                next_item["key"] = raw_key
+                self._items[index] = next_item
+                self._save()
+                return self._public_item(next_item), raw_key
+        return None
 
     def delete_key(self, key_id: str, *, role: AuthRole | None = None) -> bool:
         normalized_id = self._clean(key_id)

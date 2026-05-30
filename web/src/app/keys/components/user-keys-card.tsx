@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Eye,
   Image as ImageIcon,
   Infinity as InfinityIcon,
   KeyRound,
@@ -16,6 +17,7 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Trash2,
@@ -36,6 +38,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -45,7 +52,9 @@ import {
 import {
   createUserKey,
   deleteUserKey,
+  fetchUserKeyPlaintext,
   fetchUserKeys,
+  regenerateUserKey,
   updateUserKey,
   type UserKey,
   type UserKeyCreatePayload,
@@ -239,6 +248,15 @@ function readNumber(value: unknown): number {
   return Math.max(0, Math.floor(Number(value || 0)));
 }
 
+async function copyToClipboard(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast.success("已复制到剪贴板");
+  } catch {
+    toast.error("复制失败，请手动复制");
+  }
+}
+
 const PAGE_SIZE_OPTIONS = ["10", "20", "50", "100"] as const;
 
 export function UserKeysCard() {
@@ -252,6 +270,7 @@ export function UserKeysCard() {
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
+  const [customKey, setCustomKey] = useState("");
   const [createForm, setCreateForm] = useState<CreateFormState>(defaultCreateForm);
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
@@ -336,6 +355,8 @@ export function UserKeysCard() {
       return;
     }
     const payload: UserKeyCreatePayload = { name: name.trim() };
+    const trimmedKey = customKey.trim();
+    if (trimmedKey) payload.key = trimmedKey;
     const view = payload as Record<string, unknown>;
     ALL_QUOTA_KINDS.forEach((meta) => {
       const conf = createForm[meta.kind];
@@ -348,6 +369,7 @@ export function UserKeysCard() {
       setItems(data.items);
       setRevealedKey(data.key);
       setName("");
+      setCustomKey("");
       setCreateForm(defaultCreateForm());
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
@@ -495,13 +517,8 @@ export function UserKeysCard() {
     }
   };
 
-  const handleCopy = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success("已复制到剪贴板");
-    } catch {
-      toast.error("复制失败，请手动复制");
-    }
+  const handleCopy = (value: string) => {
+    void copyToClipboard(value);
   };
 
   return (
@@ -591,6 +608,10 @@ export function UserKeysCard() {
                           onEdit={() => openEditDialog(item)}
                           onToggle={() => void handleToggle(item)}
                           onDelete={() => setDeletingItem(item)}
+                          onAfterRegenerate={(nextItems, newKey) => {
+                            setItems(nextItems);
+                            setRevealedKey(newKey);
+                          }}
                         />
                       ))}
                     </tbody>
@@ -694,6 +715,7 @@ export function UserKeysCard() {
           setIsDialogOpen(open);
           if (!open) {
             setName("");
+            setCustomKey("");
             setCreateForm(defaultCreateForm());
           }
         }}
@@ -715,6 +737,18 @@ export function UserKeysCard() {
                 placeholder="例如：设计同学 A、运营临时账号"
                 className="h-11 rounded-xl border-stone-200 bg-white"
               />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-stone-700">自定义密钥（可选）</label>
+              <Input
+                value={customKey}
+                onChange={(event) => setCustomKey(event.target.value)}
+                placeholder="留空则自动生成，例如：sk-your-custom-user-key"
+                className="h-11 rounded-xl border-stone-200 bg-white font-mono"
+              />
+              <p className="text-xs leading-5 text-stone-500">
+                填了就以此为准；不能与管理员密钥或其他用户密钥重复。
+              </p>
             </div>
             <QuotaGroupCreate
               title="画图额度"
@@ -876,14 +910,64 @@ function KeyRow({
   onEdit,
   onToggle,
   onDelete,
+  onAfterRegenerate,
 }: {
   item: UserKey;
   pending: boolean;
   onEdit: () => void;
   onToggle: () => void;
   onDelete: () => void;
+  onAfterRegenerate: (items: UserKey[], newKey: string) => void;
 }) {
+  const [revealOpen, setRevealOpen] = useState(false);
+  const [revealLoading, setRevealLoading] = useState(false);
+  const [revealError, setRevealError] = useState("");
+  const [plaintext, setPlaintext] = useState("");
+  const [regenerating, setRegenerating] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const loadPlaintext = async () => {
+    setRevealLoading(true);
+    setRevealError("");
+    try {
+      const data = await fetchUserKeyPlaintext(item.id);
+      if (data.key_visible && data.key) {
+        setPlaintext(data.key);
+        setKeyInput(data.key);
+      } else {
+        setPlaintext("");
+        setKeyInput("");
+        setRevealError("这条是历史密钥，后端只存了哈希。改成你想要的值或直接点「生成新密钥」即可，旧密钥会立即失效。");
+      }
+    } catch (error) {
+      setRevealError(error instanceof Error ? error.message : "读取密钥失败");
+    } finally {
+      setRevealLoading(false);
+    }
+  };
+
+  const trimmedInput = keyInput.trim();
+  const useCustom = Boolean(trimmedInput) && trimmedInput !== plaintext;
+
+  const handleRegenerate = async () => {
+    if (regenerating) return;
+    setRegenerating(true);
+    try {
+      const data = await regenerateUserKey(item.id, useCustom ? trimmedInput : undefined);
+      onAfterRegenerate(data.items, data.key);
+      setConfirmOpen(false);
+      setRevealOpen(false);
+      toast.success(useCustom ? "已替换为自定义密钥，旧密钥已失效" : "已生成新密钥，旧密钥已失效");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重置密钥失败");
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
   return (
+    <>
     <tr className="border-b border-stone-100 align-top text-sm even:bg-stone-50/40 hover:bg-stone-50">
       <td className="px-4 py-3">
         <div className="font-medium text-stone-800">{item.name}</div>
@@ -904,6 +988,77 @@ function KeyRow({
       <td className="px-4 py-3 font-data text-xs text-stone-500">{formatDateTime(item.last_used_at)}</td>
       <td className="px-4 py-3">
         <div className="flex items-center justify-end gap-0.5 text-stone-500">
+          <Popover
+            open={revealOpen}
+            onOpenChange={(next) => {
+              setRevealOpen(next);
+              if (next) void loadPlaintext();
+              // 关闭分支故意不清 keyInput / plaintext / revealError：
+              // 点"确认替换"时，pointerDown 先到达 Popover 的 onPointerDownOutside（Dialog 是另一个 portal），
+              // 这里若清掉 keyInput，紧接着的 click 会跑到带空 keyInput 的新闭包，
+              // 请求体 key="" 让后端走自动生成分支。下次打开 Popover 时 loadPlaintext 会重写这几个状态。
+            }}
+          >
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="cursor-pointer rounded-md p-1.5 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50"
+                disabled={pending}
+                title="查看密钥"
+              >
+                <Eye className="size-4" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-[320px] space-y-3 text-sm">
+              <div className="text-xs font-medium text-stone-500">{item.name} · 当前密钥</div>
+              {revealLoading ? (
+                <div className="flex items-center gap-2 text-stone-500">
+                  <LoaderCircle className="size-4 animate-spin" />
+                  正在读取…
+                </div>
+              ) : (
+                <>
+                  {!plaintext && revealError ? (
+                    <p className="text-xs leading-5 text-stone-600">{revealError}</p>
+                  ) : null}
+                  <Input
+                    value={keyInput}
+                    onChange={(event) => setKeyInput(event.target.value)}
+                    placeholder={plaintext ? "" : "留空则自动生成新密钥"}
+                    className="h-9 rounded-lg border-stone-200 bg-white font-mono text-[12px]"
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    {plaintext ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-lg border-stone-200 bg-white"
+                        onClick={() => void copyToClipboard(keyInput || plaintext)}
+                      >
+                        <Copy className="size-3.5" />
+                        复制
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-8 rounded-lg bg-stone-950 text-white hover:bg-stone-800"
+                      onClick={() => setConfirmOpen(true)}
+                      disabled={regenerating}
+                    >
+                      {regenerating ? (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-3.5" />
+                      )}
+                      {useCustom ? "替换为该密钥" : "重置"}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </PopoverContent>
+          </Popover>
           <button
             type="button"
             className="cursor-pointer rounded-md p-1.5 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50"
@@ -934,6 +1089,46 @@ function KeyRow({
         </div>
       </td>
     </tr>
+    <Dialog open={confirmOpen} onOpenChange={(open) => (!open && !regenerating ? setConfirmOpen(false) : null)}>
+      <DialogContent className="rounded-2xl p-6 sm:max-w-[440px]">
+        <DialogHeader className="gap-2">
+          <DialogTitle>{useCustom ? "替换为自定义密钥" : "重置密钥"}</DialogTitle>
+          <DialogDescription className="text-sm leading-6">
+            {useCustom ? (
+              <>
+                确认把「{item.name}」的密钥替换为下面这个值吗？旧密钥会立即失效。
+                <span className="mt-3 block rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-[12px] break-all text-stone-800">
+                  {trimmedInput}
+                </span>
+              </>
+            ) : (
+              <>确认重置「{item.name}」的密钥吗？旧密钥会立即失效，使用方需要更换为新密钥。</>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-10 rounded-xl bg-stone-100 px-5 text-stone-700 hover:bg-stone-200"
+            onClick={() => setConfirmOpen(false)}
+            disabled={regenerating}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+            onClick={() => void handleRegenerate()}
+            disabled={regenerating}
+          >
+            {regenerating ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            {useCustom ? "确认替换" : "确认重置"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 

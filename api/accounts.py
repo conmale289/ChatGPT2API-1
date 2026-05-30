@@ -27,6 +27,7 @@ from services.sub2api_service import (
 
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
+    key: str = ""
     image_daily_quota: int = 0
     image_daily_unlimited: bool = True
     image_monthly_quota: int = 0
@@ -63,6 +64,10 @@ class UserKeyUpdateRequest(BaseModel):
     reset_chat_daily_used: bool | None = None
     reset_chat_monthly_used: bool | None = None
     reset_chat_total_used: bool | None = None
+
+
+class UserKeyRegenerateRequest(BaseModel):
+    key: str = ""
 
 
 class AccountCreateRequest(BaseModel):
@@ -169,6 +174,7 @@ def create_router() -> APIRouter:
             item, raw_key = auth_service.create_key(
                 role="user",
                 name=body.name,
+                key=body.key,
                 image_daily_quota=max(0, int(body.image_daily_quota or 0)),
                 image_daily_unlimited=bool(body.image_daily_unlimited),
                 image_monthly_quota=max(0, int(body.image_monthly_quota or 0)),
@@ -216,6 +222,35 @@ def create_router() -> APIRouter:
         if not auth_service.delete_key(key_id, role="user"):
             raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
         return {"items": auth_service.list_keys(role="user")}
+
+    @router.get("/api/auth/users/{key_id}/key")
+    async def reveal_user_key(key_id: str, response: Response, authorization: str | None = Header(default=None)):
+        # 任何中间层缓存都禁掉：明文密钥不能被代理 / 浏览器留底。
+        response.headers["Cache-Control"] = "no-store"
+        require_admin(authorization)
+        result = auth_service.reveal_key(key_id, role="user")
+        if result is None:
+            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+        return result
+
+    @router.post("/api/auth/users/{key_id}/regenerate")
+    async def regenerate_user_key(
+        key_id: str,
+        response: Response,
+        body: UserKeyRegenerateRequest | None = None,
+        authorization: str | None = Header(default=None),
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        require_admin(authorization)
+        custom_key = (body.key if body else "") or ""
+        try:
+            result = auth_service.regenerate_key(key_id, role="user", key=custom_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        if result is None:
+            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+        item, raw_key = result
+        return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
 
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):
