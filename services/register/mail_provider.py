@@ -199,6 +199,9 @@ class BaseMailProvider:
     def close(self) -> None:
         pass
 
+    def delete_mailbox(self, mailbox: dict[str, Any]) -> bool:
+        raise RuntimeError(f"{self.name} 不支持删除邮箱")
+
 
 class CloudflareTempMailProvider(BaseMailProvider):
     name = "cloudflare_temp_email"
@@ -347,6 +350,13 @@ class DuckMailProvider(BaseMailProvider):
             html_content = "".join(str(value) for value in html_content)
         return {"provider": self.name, "mailbox": mailbox["address"], "message_id": message_id, "subject": str(item.get("subject") or ""), "sender": str(sender), "text_content": str(item.get("text") or item.get("text_content") or ""), "html_content": str(html_content), "received_at": _parse_received_at(item.get("createdAt") or item.get("created_at") or item.get("receivedAt") or item.get("date")), "raw": item}
 
+    def delete_mailbox(self, mailbox: dict[str, Any]) -> bool:
+        account_id = str(mailbox.get("account_id") or "").strip().removeprefix("/accounts/")
+        if not account_id:
+            raise RuntimeError("DuckMail 删除邮箱缺少 account_id")
+        self._request("DELETE", f"/accounts/{account_id}", use_api_key=True, expected=(200, 202, 204))
+        return True
+
     def close(self) -> None:
         self.session.close()
 
@@ -439,6 +449,13 @@ class MoEmailProvider(BaseMailProvider):
         if isinstance(sender, dict):
             sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
         return {"provider": self.name, "mailbox": mailbox["address"], "message_id": message_id, "subject": str(message.get("subject") or item.get("subject") or ""), "sender": str(sender), "text_content": text_content, "html_content": html_content, "received_at": _parse_received_at(message.get("createdAt") or message.get("created_at") or message.get("receivedAt") or message.get("date") or message.get("timestamp") or item.get("createdAt") or item.get("created_at") or item.get("receivedAt") or item.get("date") or item.get("timestamp")), "raw": detail}
+
+    def delete_mailbox(self, mailbox: dict[str, Any]) -> bool:
+        email_id = str(mailbox.get("email_id") or "").strip()
+        if not email_id:
+            raise RuntimeError("MoEmail 删除邮箱缺少 email_id")
+        self._request("DELETE", f"/api/emails/{email_id}", expected=(200, 202, 204))
+        return True
 
     def close(self) -> None:
         self.session.close()
@@ -543,6 +560,13 @@ class InbucketMailProvider(BaseMailProvider):
                 return normalized
         return None
 
+    def delete_mailbox(self, mailbox: dict[str, Any]) -> bool:
+        mailbox_name = str(mailbox.get("mailbox_name") or self._mailbox_name(str(mailbox.get("address") or ""))).strip()
+        if not mailbox_name:
+            raise RuntimeError("Inbucket 删除邮箱缺少 mailbox_name")
+        self._request("DELETE", f"/api/v1/mailbox/{mailbox_name}", expected=(200, 202, 204))
+        return True
+
     def close(self) -> None:
         self.session.close()
 
@@ -589,6 +613,8 @@ class CloudMailProvider(BaseMailProvider):
             resp = self.session.request(method.upper(), f"{self.api_base}{path}", headers={"Authorization": self.token}, params=params, json=payload, timeout=self.conf["request_timeout"], verify=False)
         if resp.status_code not in expected:
             raise RuntimeError(f"CloudMail 请求失败: {method} {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
+        if resp.status_code == 204 or not resp.text.strip():
+            return {"code": 200, "data": {}}
         data = resp.json()
         if not isinstance(data, dict):
             raise RuntimeError(f"CloudMail {method} {path} 返回结构不是对象")
@@ -611,6 +637,8 @@ class CloudMailProvider(BaseMailProvider):
     def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
         account_id = str(mailbox.get("account_id") or "").strip()
         if not account_id:
+            account_id = self._resolve_account_id(str(mailbox.get("address") or "").strip())
+        if not account_id:
             raise RuntimeError("CloudMail 缺少 account_id")
         list_data = self._request("GET", "/email/list", params={"accountId": account_id, "allReceive": 0, "type": 1, "size": 10, "emailId": 0, "timeSort": 0})
         list_payload = list_data.get("data") or {}
@@ -632,6 +660,29 @@ class CloudMailProvider(BaseMailProvider):
         if isinstance(sender, dict):
             sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
         return {"provider": self.name, "mailbox": str(mailbox.get("address") or ""), "message_id": str(item.get("emailId") or item.get("id") or ""), "subject": str(item.get("subject") or ""), "sender": str(sender), "text_content": str(item.get("text") or ""), "html_content": str(item.get("content") or ""), "received_at": _parse_received_at(item.get("createTime") or item.get("createdAt") or item.get("created_at") or item.get("date") or item.get("timestamp")), "raw": item}
+
+    def _resolve_account_id(self, address: str) -> str:
+        if not address:
+            return ""
+        data = self._request("GET", "/account/list", params={"size": 200, "accountId": 0})
+        payload = data.get("data")
+        items = payload if isinstance(payload, list) else (payload.get("list") or []) if isinstance(payload, dict) else []
+        for item in items:
+            if isinstance(item, dict) and str(item.get("email") or "").strip().lower() == address.lower():
+                return str(item.get("accountId") or item.get("id") or "").strip()
+        return ""
+
+    def delete_mailbox(self, mailbox: dict[str, Any]) -> bool:
+        account_id = str(mailbox.get("account_id") or "").strip()
+        if not account_id:
+            account_id = self._resolve_account_id(str(mailbox.get("address") or "").strip())
+        if not account_id:
+            raise RuntimeError("CloudMail 删除邮箱缺少 account_id")
+        try:
+            self._request("DELETE", "/account/delete", params={"accountId": account_id}, expected=(200, 202, 204))
+        except RuntimeError:
+            self._request("POST", "/account/delete", payload={"accountId": account_id}, expected=(200, 202, 204))
+        return True
 
     def close(self) -> None:
         self.session.close()
@@ -744,6 +795,38 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
     raise RuntimeError(f"不支持的 mail.provider: {entry['type']}")
 
 
+def _entry_matches_address(entry: dict, address: str) -> bool:
+    domain = address.rsplit("@", 1)[-1].strip().lower() if "@" in address else ""
+    if not domain:
+        return False
+    candidates: list[str] = []
+    raw_domain = entry.get("domain") or []
+    if isinstance(raw_domain, list):
+        candidates.extend(str(item) for item in raw_domain)
+    else:
+        candidates.append(str(raw_domain))
+    candidates.append(str(entry.get("default_domain") or ""))
+    for candidate in candidates:
+        normalized = candidate.strip().lower().lstrip("@")
+        if normalized.startswith("*."):
+            normalized = normalized[2:]
+        if normalized and (domain == normalized or domain.endswith(f".{normalized}")):
+            return True
+    return False
+
+
+def _create_provider_for_mailbox(mail_config: dict, mailbox: dict) -> BaseMailProvider:
+    provider = str(mailbox.get("provider") or "").strip()
+    provider_ref = str(mailbox.get("provider_ref") or "").strip()
+    if provider or provider_ref:
+        return _create_provider(mail_config, provider, provider_ref)
+    address = str(mailbox.get("address") or "").strip()
+    entry = next((dict(item) for item in _enabled_entries(mail_config) if _entry_matches_address(item, address)), None)
+    if not entry:
+        raise RuntimeError(f"无法根据邮箱地址匹配 mail provider: {address}")
+    return _create_provider(mail_config, str(entry.get("type") or ""), str(entry.get("provider_ref") or ""))
+
+
 def create_mailbox(mail_config: dict, username: str | None = None) -> dict:
     provider = _create_provider(mail_config)
     try:
@@ -753,8 +836,19 @@ def create_mailbox(mail_config: dict, username: str | None = None) -> dict:
 
 
 def wait_for_code(mail_config: dict, mailbox: dict) -> str | None:
-    provider = _create_provider(mail_config, str(mailbox.get("provider") or ""), str(mailbox.get("provider_ref") or ""))
+    provider = _create_provider_for_mailbox(mail_config, mailbox)
     try:
         return provider.wait_for_code(mailbox)
+    finally:
+        provider.close()
+
+
+def delete_mailbox(mail_config: dict, mailbox: dict) -> bool:
+    mailbox = dict(mailbox or {})
+    if not str(mailbox.get("address") or "").strip():
+        raise RuntimeError("删除邮箱缺少 address")
+    provider = _create_provider_for_mailbox(mail_config, mailbox)
+    try:
+        return provider.delete_mailbox(mailbox)
     finally:
         provider.close()

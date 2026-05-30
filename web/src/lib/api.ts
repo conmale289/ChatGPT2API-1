@@ -26,6 +26,11 @@ export type Account = {
   success: number;
   fail: number;
   last_used_at?: string | null;
+  mailbox?: Record<string, unknown> | null;
+  password?: string | null;
+  refresh_token?: string | null;
+  id_token?: string | null;
+  created_at?: string | null;
 };
 
 type AccountListResponse = {
@@ -300,6 +305,7 @@ export type RegisterConfig = {
   fixed_password: string;
   stats: {
     job_id?: string;
+    job_kind?: string;
     success: number;
     fail: number;
     done: number;
@@ -345,9 +351,13 @@ export async function createAccounts(tokens: string[]) {
 }
 
 export async function deleteAccounts(tokens: string[]) {
+  return deleteAccountsWithOptions(tokens);
+}
+
+export async function deleteAccountsWithOptions(tokens: string[], deleteMailboxes = false) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "DELETE",
-    body: { tokens },
+    body: { tokens, delete_mailboxes: deleteMailboxes },
   });
 }
 
@@ -726,6 +736,10 @@ export async function stopRegister() {
 
 export async function resetRegister() {
   return httpRequest<{ register: RegisterConfig }>("/api/register/reset", { method: "POST" });
+}
+
+export async function repairAbnormalAccounts() {
+  return httpRequest<{ register: RegisterConfig }>("/api/register/repair-abnormal", { method: "POST" });
 }
 
 // ── CPA (CLIProxyAPI) ──────────────────────────────────────────────

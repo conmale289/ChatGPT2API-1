@@ -12,6 +12,7 @@ import {
   fetchBackups,
   fetchRegisterConfig,
   resetRegister as resetRegisterApi,
+  repairAbnormalAccounts,
   fetchSettingsConfig,
   runBackupNow,
   startRegister,
@@ -237,6 +238,7 @@ type SettingsStore = {
   saveRegister: () => Promise<void>;
   toggleRegister: () => Promise<void>;
   resetRegister: () => Promise<void>;
+  repairAbnormalRegisterAccounts: () => Promise<void>;
 
   loadPools: (silent?: boolean) => Promise<void>;
   openAddDialog: () => void;
@@ -779,6 +781,40 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       toast.success("注册统计已重置");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "重置注册统计失败");
+    } finally {
+      set({ isSavingRegister: false });
+    }
+  },
+
+  repairAbnormalRegisterAccounts: async () => {
+    const { registerConfig } = get();
+    if (!registerConfig) return;
+    set({ isSavingRegister: true });
+    try {
+      if (registerConfig.enabled && registerConfig.stats?.job_kind === "repair_abnormal") {
+        const data = await stopRegister();
+        set({ registerConfig: data.register });
+        toast.success("已请求停止异常账号修复");
+        return;
+      }
+      if (!registerConfig.enabled) {
+        await updateRegisterConfig({
+          mail: registerConfig.mail,
+          proxy: registerConfig.proxy.trim(),
+          total: Math.max(1, Number(registerConfig.total) || 1),
+          threads: Math.max(1, Number(registerConfig.threads) || 1),
+          mode: registerConfig.mode,
+          target_quota: Math.max(1, Number(registerConfig.target_quota) || 1),
+          target_available: Math.max(1, Number(registerConfig.target_available) || 1),
+          check_interval: Math.max(1, Number(registerConfig.check_interval) || 5),
+          fixed_password: registerConfig.fixed_password,
+        });
+      }
+      const data = await repairAbnormalAccounts();
+      set({ registerConfig: data.register });
+      toast.success(registerConfig.enabled ? "已有任务正在运行" : "已启动异常账号修复任务");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "启动异常账号修复失败");
     } finally {
       set({ isSavingRegister: false });
     }

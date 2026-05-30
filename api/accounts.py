@@ -76,6 +76,7 @@ class AccountCreateRequest(BaseModel):
 
 class AccountDeleteRequest(BaseModel):
     tokens: list[str] = Field(default_factory=list)
+    delete_mailboxes: bool = False
 
 
 class AccountRefreshRequest(BaseModel):
@@ -278,7 +279,7 @@ def create_router() -> APIRouter:
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        return account_service.delete_accounts(tokens)
+        return account_service.delete_accounts(tokens, delete_mailboxes=body.delete_mailboxes)
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):

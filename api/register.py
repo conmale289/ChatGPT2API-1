@@ -51,6 +51,11 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return {"register": register_service.reset()}
 
+    @router.post("/api/register/repair-abnormal")
+    async def repair_abnormal_accounts(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"register": register_service.repair_abnormal_accounts()}
+
     @router.get("/api/register/events")
     async def register_events(token: str = ""):
         require_admin(f"Bearer {token}")

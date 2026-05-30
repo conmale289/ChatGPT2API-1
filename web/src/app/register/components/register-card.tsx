@@ -15,6 +15,7 @@ import {
   Terminal,
   Trash2,
   UserPlus,
+  Wrench,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -45,9 +46,12 @@ export function RegisterCard() {
   const save = useSettingsStore((state) => state.saveRegister);
   const toggle = useSettingsStore((state) => state.toggleRegister);
   const reset = useSettingsStore((state) => state.resetRegister);
+  const repairAbnormal = useSettingsStore((state) => state.repairAbnormalRegisterAccounts);
 
   const [configOpen, setConfigOpen] = useState(false);
   const configSectionRef = useRef<HTMLElement | null>(null);
+  const logViewportRef = useRef<HTMLDivElement | null>(null);
+  const logs = config?.logs || [];
 
   // 展开后把整个配置面板的底部滚到视口里。等一帧让 DOM 先渲染完，
   // 否则 scrollIntoView 拿到的是没展开前的位置。
@@ -58,6 +62,12 @@ export function RegisterCard() {
     });
     return () => cancelAnimationFrame(raf);
   }, [configOpen]);
+
+  useEffect(() => {
+    const viewport = logViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [logs.length]);
 
   if (isLoading) {
     return (
@@ -71,7 +81,7 @@ export function RegisterCard() {
 
   const stats = config.stats || { success: 0, fail: 0, done: 0, running: 0, threads: config.threads };
   const providers = config.mail.providers || [];
-  const logs = config.logs || [];
+  const isRepairingAbnormal = config.enabled && stats.job_kind === "repair_abnormal";
 
   const targetTotal =
     config.mode === "quota"
@@ -183,6 +193,27 @@ export function RegisterCard() {
             </Button>
             <Button
               variant="outline"
+              className={cn(
+                "h-10 cursor-pointer rounded-lg border-border px-3",
+                isRepairingAbnormal
+                  ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                  : "bg-background text-foreground",
+              )}
+              onClick={() => void repairAbnormal()}
+              disabled={isSaving || (config.enabled && !isRepairingAbnormal)}
+              title={isRepairingAbnormal ? "停止修复" : "修复异常账号"}
+            >
+              {isSaving ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : isRepairingAbnormal ? (
+                <Square className="size-4 fill-current" />
+              ) : (
+                <Wrench className="size-4" />
+              )}
+              {isRepairingAbnormal ? "停止修复" : "修复异常账号"}
+            </Button>
+            <Button
+              variant="outline"
               className="h-10 cursor-pointer rounded-lg border-border bg-background px-3 text-foreground"
               onClick={() => void reset()}
               disabled={isSaving || config.enabled}
@@ -256,16 +287,13 @@ export function RegisterCard() {
             <span className="size-2 rounded-full bg-emerald-400/80" />
           </div>
         </div>
-        <div className="h-[calc(100vh-540px)] min-h-[280px] overflow-y-auto px-4 py-3 font-data text-[12px] leading-[1.65]">
+        <div ref={logViewportRef} className="h-[calc(100vh-540px)] min-h-[280px] overflow-y-auto px-4 py-3 font-data text-[12px] leading-[1.65]">
           {logs.length === 0 ? (
             <div className="flex h-full items-center justify-center text-white/30">
               <span>$ waiting for events...</span>
             </div>
           ) : (
-            logs
-              .slice()
-              .reverse()
-              .map((item, index) => (
+            logs.map((item, index) => (
                 <div
                   key={`${item.time}-${index}`}
                   className={cn(
