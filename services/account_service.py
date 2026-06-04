@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Condition, Lock
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from services.config import config
 from services.log_service import (
@@ -72,6 +72,12 @@ class AccountService:
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
         normalized["last_used_at"] = normalized.get("last_used_at")
+        mailbox = normalized.get("mailbox")
+        normalized["mailbox"] = mailbox if isinstance(mailbox, dict) else None
+        normalized["password"] = normalized.get("password") or None
+        normalized["refresh_token"] = normalized.get("refresh_token") or None
+        normalized["id_token"] = normalized.get("id_token") or None
+        normalized["created_at"] = normalized.get("created_at") or None
         return normalized
 
     def list_tokens(self) -> list[str]:
@@ -169,7 +175,7 @@ class AccountService:
         if not config.auto_remove_invalid_accounts:
             self.update_account(access_token, {"status": "异常", "quota": 0})
             return False
-        removed = bool(self.delete_accounts([access_token])["removed"])
+        removed = bool(self.delete_accounts([access_token], delete_mailboxes=True)["removed"])
         if removed:
             log_service.add(LOG_TYPE_ACCOUNT, "自动移除异常账号",
                             {"source": event, "token": anonymize_token(access_token)})
@@ -197,10 +203,15 @@ class AccountService:
                    and (token := item.get("access_token") or "")
             ]
 
-    def add_accounts(self, tokens: list[str]) -> dict:
+    def add_accounts(self, tokens: list[str], account_records: list[dict] | None = None) -> dict:
         tokens = list(dict.fromkeys(token for token in tokens if token))
         if not tokens:
             return {"added": 0, "skipped": 0, "items": self.list_accounts()}
+        record_by_token = {
+            str(record.get("access_token") or "").strip(): dict(record)
+            for record in account_records or []
+            if isinstance(record, dict) and str(record.get("access_token") or "").strip()
+        }
 
         with self._lock:
             added = 0
@@ -212,9 +223,13 @@ class AccountService:
                     current = {}
                 else:
                     skipped += 1
+                merged_record = record_by_token.get(access_token, {})
+                if not current.get("created_at") and not merged_record.get("created_at"):
+                    merged_record = {**merged_record, "created_at": datetime.now(timezone.utc).isoformat()}
                 account = self._normalize_account(
                     {
                         **current,
+                        **merged_record,
                         "access_token": access_token,
                         "type": str(current.get("type") or "free"),
                     }
@@ -227,12 +242,18 @@ class AccountService:
                             {"added": added, "skipped": skipped})
         return {"added": added, "skipped": skipped, "items": items}
 
-    def delete_accounts(self, tokens: list[str]) -> dict:
+    def delete_accounts(self, tokens: list[str], delete_mailboxes: bool = False) -> dict:
         target_set = set(token for token in tokens if token)
         if not target_set:
-            return {"removed": 0, "items": self.list_accounts()}
+            return {"removed": 0, "mailboxes_removed": 0, "mailbox_errors": [], "items": self.list_accounts()}
+        removed_accounts: list[dict] = []
         with self._lock:
-            removed = sum(self._accounts.pop(token, None) is not None for token in target_set)
+            removed = 0
+            for token in target_set:
+                account = self._accounts.pop(token, None)
+                if account is not None:
+                    removed += 1
+                    removed_accounts.append(dict(account))
             for token in target_set:
                 self._image_inflight.pop(token, None)
             if removed:
@@ -243,7 +264,41 @@ class AccountService:
                 self._save_accounts()
                 log_service.add(LOG_TYPE_ACCOUNT, f"删除 {removed} 个账号", {"removed": removed})
             items = [dict(item) for item in self._accounts.values()]
-        return {"removed": removed, "items": items}
+        mailbox_result = self._delete_account_mailboxes(removed_accounts) if delete_mailboxes else {"removed": 0, "errors": []}
+        return {
+            "removed": removed,
+            "mailboxes_removed": mailbox_result["removed"],
+            "mailbox_errors": mailbox_result["errors"],
+            "items": items,
+        }
+
+    def _delete_account_mailboxes(self, accounts: list[dict]) -> dict:
+        if not accounts:
+            return {"removed": 0, "errors": []}
+        try:
+            from services.register import mail_provider
+            from services.register import openai_register
+        except Exception as exc:
+            return {"removed": 0, "errors": [{"email": "", "error": str(exc)}]}
+
+        removed = 0
+        errors = []
+        for account in accounts:
+            email = str(account.get("email") or "").strip()
+            mailbox = account.get("mailbox") if isinstance(account.get("mailbox"), dict) else {}
+            if not mailbox and email:
+                mailbox = {"address": email}
+            if not str(mailbox.get("address") or "").strip():
+                errors.append({"email": email, "error": "缺少邮箱地址，无法删除邮箱账号"})
+                continue
+            try:
+                if mail_provider.delete_mailbox(openai_register.config["mail"], mailbox):
+                    removed += 1
+                    log_service.add(LOG_TYPE_ACCOUNT, "删除异常账号对应邮箱", {"email": email})
+            except Exception as exc:
+                errors.append({"email": email, "error": str(exc)})
+                log_service.add(LOG_TYPE_ACCOUNT, "删除异常账号对应邮箱失败", {"email": email, "error": str(exc)})
+        return {"removed": removed, "errors": errors}
 
     def update_account(self, access_token: str, updates: dict) -> dict | None:
         if not access_token:

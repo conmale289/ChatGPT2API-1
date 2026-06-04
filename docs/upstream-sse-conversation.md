@@ -269,3 +269,38 @@ SSE 结束后可按以下顺序判断结果：
 4. 查询完整会话时，仍然只读取 `role=tool` 且 `async_task_type=image_gen` 的消息。
 5. 如果没有图片结果也没有文本，返回上游异常或空结果错误。
 
+## 私有区(PUA)标注清洗
+
+上游正文里会嵌入用 U+E200..U+E203 包裹的内部标注，浏览器 UI 渲染成卡片或脚注，但作为 OpenAI 兼容 API 透传时这些字符不可见，留下的就是 `entity[...]`、`citeturn0search0` 这样的乱码。所有清洗集中在 `services/protocol/chatgpt_markup.py`，由 `iter_conversation_payloads` 在中央枢纽调用，chat completions / responses / anthropic / `/api/chat/stream` 各协议统一受益。
+
+| 标注 | 形态 | 处理方式 |
+|:--|:--|:--|
+| 实体卡片 | `entity["song","爱丫爱丫","BY2歌曲"]` | 解析 JSON 数组，取第二项作为名称替换 |
+| 搜索引用 | `citeturn0search2turn0search1` | 配合上游 `content_references` 元数据替换为 `[[N]](url)`；查不到链接则整段丢弃 |
+| 孤立 PUA 字符 | 单独的 U+E200..U+E203 | 直接抹去 |
+
+`content_references` 元数据通过递归扫描事件树捕获，无需额外网络请求。常见入口：
+
+```json
+{"v":{"message":{"metadata":{"content_references":[
+  {"matched_text":"citeturn0search2",
+   "items":[{"url":"https://example.com","title":"Example"}]}
+]}}}}
+```
+
+**流式安全**：`ConversationState` 同时维护 raw `text` 与清洗后的 `clean_text`，每帧 patch 后只清洗"最后一个 `` 之前"的稳定前缀，未闭合的标记保留到下一帧再处理，避免半截标记泄露给客户端。`conversation.delta.delta` 字段恒为 clean 文本的增量。
+
+## 视频引用卡片（前端渲染）
+
+清洗后视频类引用以 `[[N]](https://www.youtube.com/watch?v=...)` 形式落在 markdown 里。OpenAI 兼容协议本身只走文本，**视频卡片是前端渲染层的事**，后端不变。
+
+本项目自带的 web 前端（`web/src/app/chat/page.tsx`）通过 `ReactMarkdown` 的 `components.a` 钩子识别 YouTube 链接，命中时把 `<a>` 替换成 `VideoCard` 组件：
+
+- 解析逻辑：`web/src/lib/video.ts` 的 `parseVideoUrl`，认 `youtube.com/watch?v=`、`youtu.be/`、`/embed/`、`/shorts/` 各种形式。
+- 缩略图：从 video id 直接拼 `https://img.youtube.com/vi/{id}/hqdefault.jpg`，零依赖。
+- 播放：点击切换为 `youtube-nocookie.com/embed/{id}?autoplay=1` 的 iframe，内联播放。
+- 同消息内同 video id 去重：第一次出现渲染卡片，后续仍以普通链接呈现。
+- 非视频链接（普通 URL）正常按 `<a>` 渲染，不受影响。
+
+其它 API 客户端（Cherry Studio、Android Draw 等）拿到的还是原始 `[[N]](url)`，按各自 markdown 能力呈现，与后端解耦。
+

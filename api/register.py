@@ -20,6 +20,7 @@ class RegisterConfigRequest(BaseModel):
     target_quota: int | None = None
     target_available: int | None = None
     check_interval: int | None = None
+    fixed_password: str | None = None
 
 
 def create_router() -> APIRouter:
@@ -49,6 +50,11 @@ def create_router() -> APIRouter:
     async def reset_register(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return {"register": register_service.reset()}
+
+    @router.post("/api/register/repair-abnormal")
+    async def repair_abnormal_accounts(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"register": register_service.repair_abnormal_accounts()}
 
     @router.get("/api/register/events")
     async def register_events(token: str = ""):

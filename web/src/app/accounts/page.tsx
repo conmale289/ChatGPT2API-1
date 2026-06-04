@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/select";
 import {
   deleteAccounts,
+  deleteAccountsWithOptions,
   fetchAccounts,
   refreshAccounts,
   updateAccount,
@@ -132,6 +133,14 @@ function formatRestoreAt(value?: string | null) {
   )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
   return { absolute, relative };
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (num: number) => String(num).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function formatQuotaSummary(accounts: Account[]) {
@@ -549,7 +558,7 @@ function AccountsPageContent() {
     return items;
   }, [pageCount, safePage]);
 
-  const handleDeleteTokens = async (tokens: string[]) => {
+  const handleDeleteTokens = async (tokens: string[], deleteMailboxes = false) => {
     if (tokens.length === 0) {
       toast.error("请先选择要删除的账户");
       return;
@@ -557,7 +566,7 @@ function AccountsPageContent() {
 
     setIsDeleting(true);
     try {
-      const data = await deleteAccounts(tokens);
+      const data = deleteMailboxes ? await deleteAccountsWithOptions(tokens, true) : await deleteAccounts(tokens);
       setAccounts(data.items);
       setSelectedIds((prev) => prev.filter((id) => data.items.some((item) => item.access_token === id)));
       toast.success(`删除 ${data.removed ?? 0} 个账户`);
@@ -895,7 +904,7 @@ function AccountsPageContent() {
                 <Button
                   variant="ghost"
                   className="h-8 rounded-lg px-3 text-rose-500 hover:bg-rose-50 hover:text-rose-600"
-                  onClick={() => void handleDeleteTokens(abnormalTokens)}
+                  onClick={() => void handleDeleteTokens(abnormalTokens, true)}
                   disabled={abnormalTokens.length === 0 || isDeleting}
                 >
                   {isDeleting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
@@ -944,6 +953,7 @@ function AccountsPageContent() {
                     <th className="w-56 px-4 py-2.5 font-medium">账号信息</th>
                     <th className="w-24 px-4 py-2.5 font-medium">额度</th>
                     <th className="w-40 px-4 py-2.5 font-medium">恢复时间</th>
+                    <th className="w-36 px-4 py-2.5 font-medium">注册时间</th>
                     <th className="w-18 px-4 py-2.5 font-medium">成功</th>
                     <th className="w-18 px-4 py-2.5 font-medium">失败</th>
                     <th className="w-24 px-4 py-2.5 font-medium">操作</th>
@@ -1025,6 +1035,9 @@ function AccountsPageContent() {
                               </div>
                             );
                           })()}
+                        </td>
+                        <td className="px-4 py-3 font-data text-xs leading-5 text-muted-foreground">
+                          {formatDateTime(account.created_at)}
                         </td>
                         <td className="px-4 py-3 font-data tabular-nums text-emerald-600">{account.success}</td>
                         <td className="px-4 py-3 font-data tabular-nums text-rose-500">{account.fail}</td>
