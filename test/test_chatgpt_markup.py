@@ -27,6 +27,16 @@ class SanitizeEntityTests(unittest.TestCase):
         out = sanitize(text, {}, {}, [0])
         self.assertEqual(out, "出自歌曲：爱丫爱丫演唱")
 
+    def test_entity_object_replaced_with_name(self):
+        text = f'{OPEN}entity{{"name":"OpenAI","type":"organization"}}{CLOSE}'
+        out = sanitize(text, {}, {}, [0])
+        self.assertEqual(out, "OpenAI")
+
+    def test_malformed_entity_keeps_readable_name(self):
+        text = f'{OPEN}entity["organization","OpenAI",]{CLOSE}'
+        out = sanitize(text, {}, {}, [0])
+        self.assertEqual(out, "OpenAI")
+
     def test_orphan_pua_chars_dropped(self):
         text = f"前缀{OPEN}cite{FIELD_SEP}turn0search0{CLOSE}尾"
         out = sanitize(text, {}, {}, [0])
@@ -41,6 +51,20 @@ class SanitizeEntityTests(unittest.TestCase):
         text = f"a{FIELD_SEP}b{ITEM_SEP}c"
         out = sanitize(text, {}, {}, [0])
         self.assertEqual(out, "abc")
+
+    def test_text_xml_tags_are_stripped(self):
+        text = "<Text>你好！</Text><Text>有什么我可以帮你的吗？</Text>"
+        out = sanitize(text, {}, {}, [0])
+        self.assertEqual(out, "你好！有什么我可以帮你的吗？")
+
+    def test_bold_xml_tags_are_rendered_as_markdown(self):
+        text = "<Text><Bold>开发方：</Bold> OpenAI</Text>"
+        out = sanitize(text, {}, {}, [0])
+        self.assertEqual(out, "**开发方：** OpenAI")
+
+    def test_unclosed_text_tag_kept_for_next_frame(self):
+        out = sanitize("你好</Te", {}, {}, [0])
+        self.assertEqual(out, "你好")
 
 
 class SanitizeCiteTests(unittest.TestCase):
@@ -147,6 +171,25 @@ class StreamingDeltaTests(unittest.TestCase):
         self.assertEqual(final_text, "出自歌曲：爱丫爱丫[[1]](https://example.com)")
         self.assertNotIn(OPEN, joined)
         self.assertNotIn(CLOSE, joined)
+
+    def test_full_pipeline_strips_text_tags_in_deltas(self):
+        import json as _json
+        payloads = [
+            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "<Text>你好！</Text><Te"}),
+            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "xt>有什么我可以帮你的吗？</Text>"}),
+            "[DONE]",
+        ]
+        deltas: list[str] = []
+        final_text = ""
+        for event in iter_conversation_payloads(iter(payloads)):
+            if event["type"] == "conversation.delta":
+                deltas.append(event["delta"])
+                final_text = event["text"]
+        joined = "".join(deltas)
+        self.assertEqual(joined, "你好！有什么我可以帮你的吗？")
+        self.assertEqual(final_text, "你好！有什么我可以帮你的吗？")
+        self.assertNotIn("<Text>", joined)
+        self.assertNotIn("</Text>", joined)
 
 
 if __name__ == "__main__":

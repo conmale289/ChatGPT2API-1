@@ -8,9 +8,24 @@ from fastapi import HTTPException, Request
 from services.account_service import account_service
 from services.auth_service import auth_service
 from services.config import config
+from services.protocol.conversation import normalize_image_resolution
+from utils.helper import split_image_model
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIST_DIR = BASE_DIR / "web_dist"
+PAID_PLAN_TYPES = ("Pro", "Plus", "Team")
+
+
+def _normalize_plan_type(value: object) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    compact = raw.replace("_", "")
+    return {
+        "free": "free",
+        "plus": "Plus",
+        "pro": "Pro",
+        "team": "Team",
+        "business": "Team",
+    }.get(compact, "")
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -55,6 +70,80 @@ def raise_image_quota_error(exc: Exception) -> None:
     if "no available image quota" in message.lower():
         raise HTTPException(status_code=429, detail={"error": "no available image quota"}) from exc
     raise HTTPException(status_code=502, detail={"error": message}) from exc
+
+
+def can_use_paid_image_accounts(identity: dict[str, object]) -> bool:
+    role = str(identity.get("role") or "").strip().lower()
+    if role == "admin":
+        return True
+    if bool(identity.get("can_use_paid_image_accounts")) or bool(identity.get("can_use_high_resolution")):
+        return True
+    tier = str(identity.get("account_tier") or "").strip().lower()
+    return tier in {"premium", "advanced", "paid", "plus", "pro", "team", "enterprise", "vip"}
+
+
+def image_allowed_plan_types(identity: dict[str, object]) -> tuple[str, ...] | None:
+    role = str(identity.get("role") or "").strip().lower()
+    if role == "admin":
+        return None
+    if can_use_paid_image_accounts(identity):
+        return PAID_PLAN_TYPES
+    return ("free",)
+
+
+def enforce_text_account_policy(identity: dict[str, object], plan_type: str | None) -> str | None:
+    requested = str(plan_type or "").strip()
+    role = str(identity.get("role") or "").strip().lower()
+    if role == "admin":
+        return requested or None
+    if can_use_paid_image_accounts(identity):
+        if not requested:
+            return None
+        normalized = _normalize_plan_type(requested)
+        if normalized not in PAID_PLAN_TYPES:
+            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 Plus / Pro 账号"})
+        return normalized
+    if not requested:
+        return "free"
+    if _normalize_plan_type(requested) != "free":
+        raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 free 账号"})
+    return "free"
+
+
+def text_allowed_plan_types(identity: dict[str, object]) -> tuple[str, ...] | None:
+    role = str(identity.get("role") or "").strip().lower()
+    if role == "admin":
+        return None
+    if can_use_paid_image_accounts(identity):
+        return PAID_PLAN_TYPES
+    return ("free",)
+
+
+def apply_image_account_policy(identity: dict[str, object], payload: dict[str, object]) -> dict[str, object]:
+    """按用户密钥等级给画图请求打服务端账号池约束。
+    前端禁用 2K/4K 只是体验；这里才是防 F12 / 直接调接口的硬限制。"""
+    allowed = image_allowed_plan_types(identity)
+    if allowed is None:
+        return payload
+
+    model_plan_type, base_model = split_image_model(payload.get("model"))
+    requested_plan_type = _normalize_plan_type(payload.get("plan_type"))
+    if can_use_paid_image_accounts(identity):
+        if requested_plan_type and requested_plan_type not in allowed:
+            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 Plus / Pro 账号"})
+        normalized_model_plan = _normalize_plan_type(model_plan_type)
+        if normalized_model_plan and normalized_model_plan not in allowed:
+            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 Plus / Pro 账号"})
+        if requested_plan_type:
+            payload["plan_type"] = requested_plan_type
+    else:
+        if normalize_image_resolution(payload.get("resolution")) in {"2k", "4k"}:
+            raise HTTPException(status_code=403, detail={"error": "当前用户权限不支持 2K/4K 画图"})
+        if model_plan_type or base_model == "codex-gpt-image-2":
+            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 free 画图账号"})
+        payload["plan_type"] = "free"
+    payload["allowed_plan_types"] = allowed
+    return payload
 
 
 def consume_user_quota(identity: dict[str, object], amount: int) -> None:

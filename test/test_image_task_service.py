@@ -96,6 +96,7 @@ class ImageTaskServiceTests(unittest.TestCase):
                 prompt="cat",
                 model="gpt-image-2",
                 size=None,
+                resolution="4k",
                 base_url="http://local.test",
             )
             wait_for_task(service, OWNER, "persisted-task", "success")
@@ -105,6 +106,7 @@ class ImageTaskServiceTests(unittest.TestCase):
 
             self.assertEqual(result["missing_ids"], [])
             self.assertEqual(result["items"][0]["status"], "success")
+            self.assertEqual(result["items"][0]["resolution"], "4k")
             self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
 
     def test_startup_marks_unfinished_tasks_as_error(self):

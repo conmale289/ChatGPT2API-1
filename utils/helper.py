@@ -11,7 +11,15 @@ from curl_cffi import requests
 from fastapi import HTTPException
 from utils.log import logger
 
-IMAGE_MODELS = {"gpt-image-2", "codex-gpt-image-2"}
+BASE_IMAGE_MODELS = {"gpt-image-2", "codex-gpt-image-2"}
+IMAGE_MODEL_PLAN_TYPES = ("plus", "team", "pro")
+CODEX_IMAGE_MODEL = "codex-gpt-image-2"
+PREFIXED_CODEX_IMAGE_MODELS = {
+    f"{plan_type}-{CODEX_IMAGE_MODEL}"
+    for plan_type in IMAGE_MODEL_PLAN_TYPES
+}
+IMAGE_MODELS = BASE_IMAGE_MODELS | PREFIXED_CODEX_IMAGE_MODELS
+PUBLIC_IMAGE_MODELS = BASE_IMAGE_MODELS | PREFIXED_CODEX_IMAGE_MODELS
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 
@@ -19,12 +27,46 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def split_image_model(model: object) -> tuple[str | None, str | None]:
+    normalized = str(model or "").strip().lower()
+    if not normalized:
+        return None, None
+    if normalized in BASE_IMAGE_MODELS:
+        return None, normalized
+    for plan_type in IMAGE_MODEL_PLAN_TYPES:
+        prefix = f"{plan_type}-"
+        if normalized.startswith(prefix):
+            base_model = normalized[len(prefix):]
+            if base_model == CODEX_IMAGE_MODEL:
+                return plan_type, base_model
+    return None, None
+
+
+def is_supported_image_model(model: object) -> bool:
+    _, base_model = split_image_model(model)
+    return base_model is not None
+
+
+def is_codex_image_model(model: object) -> bool:
+    _, base_model = split_image_model(model)
+    return base_model == CODEX_IMAGE_MODEL
+
+
 def is_image_chat_request(body: dict[str, object]) -> bool:
     model = str(body.get("model") or "").strip()
     modalities = body.get("modalities")
-    if model in IMAGE_MODELS:
+    if is_supported_image_model(model):
         return True
     return isinstance(modalities, list) and "image" in {str(item or "").strip().lower() for item in modalities}
+
+
+class UpstreamHTTPError(RuntimeError):
+    def __init__(self, context: str, status_code: int, body: Any, headers: Any = None) -> None:
+        super().__init__(f"{context} failed: status={status_code}, body={body}")
+        self.context = context
+        self.status_code = int(status_code)
+        self.body = body
+        self.headers = dict(headers or {})
 
 
 def ensure_ok(response: requests.Response, context: str) -> None:
@@ -35,7 +77,7 @@ def ensure_ok(response: requests.Response, context: str) -> None:
         body = response.json()
     except Exception:
         pass
-    raise RuntimeError(f"{context} failed: status={response.status_code}, body={body}")
+    raise UpstreamHTTPError(context, response.status_code, body, response.headers)
 
 
 def sse_json_stream(items) -> Iterator[str]:
@@ -240,6 +282,10 @@ def build_chat_image_markdown_content(image_result: dict[str, object]) -> str:
     markdown_images: list[str] = []
     for index, item in enumerate(image_items, start=1):
         if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if url:
+            markdown_images.append(f"![image_{index}]({url})")
             continue
         b64_json = str(item.get("b64_json") or "").strip()
         if b64_json:

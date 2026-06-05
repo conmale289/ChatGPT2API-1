@@ -4,7 +4,13 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.support import consume_user_quota, refund_user_quota, require_identity, resolve_image_base_url
+from api.support import (
+    apply_image_account_policy,
+    consume_user_quota,
+    refund_user_quota,
+    require_identity,
+    resolve_image_base_url,
+)
 from services.content_filter import check_request, request_text
 from services.image_owners_service import record_owner_for_result
 from services.image_prompts_service import record_prompt_for_result
@@ -24,6 +30,7 @@ class ImageGenerationRequest(BaseModel):
     model: str = "gpt-image-2"
     n: int = Field(default=1, ge=1, le=4)
     size: str | None = None
+    resolution: str | None = None
     response_format: str = "b64_json"
     history_disabled: bool = True
     stream: bool | None = None
@@ -82,10 +89,11 @@ def create_router() -> APIRouter:
             authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        payload = body.model_dump(mode="python")
+        apply_image_account_policy(identity, payload)
         # /v1 入口按 n 整体扣，1 次提交 = n 张。失败直接 402，不进 call.run。
         n = max(1, int(body.n or 1))
         consume_user_quota(identity, n)
-        payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         # 上游真失败时把扣的 n 退回去——LoggedCall.run / stream 内部失败分支会自动回调。
         # 这里 capture identity，failure_refund_amount 跟入口扣的金额一致。
@@ -113,12 +121,23 @@ def create_router() -> APIRouter:
             model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
             size: str | None = Form(default=None),
+            resolution: str | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
             stream: bool | None = Form(default=None),
     ):
         identity = require_identity(authorization)
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+        payload = {
+            "prompt": prompt,
+            "model": model,
+            "n": n,
+            "size": size,
+            "resolution": resolution,
+            "response_format": response_format,
+            "stream": stream,
+        }
+        apply_image_account_policy(identity, payload)
         # 同样按 n 整体扣，校验过 n 范围之后再扣，避免无效请求也被记账。
         effective_n = max(1, int(n))
         consume_user_quota(identity, effective_n)
@@ -141,16 +160,8 @@ def create_router() -> APIRouter:
                 refund_user_quota(identity, effective_n)
                 raise HTTPException(status_code=400, detail={"error": "image file is empty"})
             images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
-        payload = {
-            "prompt": prompt,
-            "images": images,
-            "model": model,
-            "n": n,
-            "size": size,
-            "response_format": response_format,
-            "stream": stream,
-            "base_url": resolve_image_base_url(request),
-        }
+        payload["images"] = images
+        payload["base_url"] = resolve_image_base_url(request)
         result = await call.run(openai_v1_image_edit.handle, payload)
         if isinstance(result, dict):
             record_owner_for_result(identity, result.get("data"))

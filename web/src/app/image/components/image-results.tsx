@@ -333,26 +333,28 @@ export function ImageResults({
           id: `${turn.id}-reference-${index}`,
           src: image.dataUrl,
         }));
+        const hasRenderableImages = turn.images.some((image) => image.status === "success" || image.status === "error");
+        const hasLoadingImages = turn.images.some((image) => image.status === "loading");
+        const showImageGrid = hasRenderableImages || hasLoadingImages;
 
         return (
           <div key={turn.id} className="flex flex-col gap-3 sm:gap-4">
             {!turn.promptDeleted ? (
               <div className="flex justify-end">
-                <div className="max-w-[90%] px-1 py-1 text-[14px] leading-6 text-stone-900 sm:max-w-[82%] sm:text-[15px] sm:leading-7">
-                  <div className="mb-1.5 flex flex-wrap justify-end gap-2 text-[11px] text-stone-400 sm:mb-2">
-                    <span>第 {turnIndex + 1} 轮</span>
-                    <span>
-                      {turn.mode === "edit" ? "编辑图" : "文生图"}
-                    </span>
-                    <span>{getTurnStatusLabel(turn.status)}</span>
+                <div className="group max-w-[92%] sm:max-w-[78%]">
+                  <div className="mb-1.5 flex flex-wrap justify-end gap-2 px-1 text-[11px] text-stone-400">
+                    <span className="font-data tabular-nums">第 {turnIndex + 1} 轮</span>
+                    <span>{turn.mode === "edit" ? "编辑图" : "文生图"}</span>
                     <span>{formatConversationTime(turn.createdAt)}</span>
                   </div>
-                  <div className="text-right">{turn.prompt}</div>
-                  <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+                  <div className="rounded-[22px] rounded-tr-md border border-stone-200/80 bg-white/90 px-4 py-3 text-left text-[14px] leading-6 text-stone-900 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-18px_rgba(15,23,42,0.22)] backdrop-blur sm:rounded-[26px] sm:rounded-tr-md sm:px-5 sm:py-3.5 sm:text-[15px] sm:leading-7">
+                    <div className="whitespace-pre-wrap break-words">{turn.prompt}</div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5 opacity-80 transition group-hover:opacity-100">
                     <button
                       type="button"
                       onClick={() => void onReuseTurnConfig(selectedConversation.id, turn.id)}
-                      className="inline-flex h-7 items-center gap-1 rounded-full bg-stone-100 px-2.5 text-[11px] font-medium text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
+                      className="inline-flex h-7 items-center gap-1 rounded-full bg-white/80 px-2.5 text-[11px] font-medium text-stone-600 ring-1 ring-stone-200/80 transition hover:bg-stone-100 hover:text-stone-900"
                     >
                       复用配置
                     </button>
@@ -404,135 +406,135 @@ export function ImageResults({
                     </div>
                   ) : null}
 
-                  <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
-                    <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
-                    <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
-                    {turn.status === "queued" ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 text-stone-500">
-                        <Clock3 className="size-3 text-stone-400" />
-                        等待前序任务完成
-                      </span>
-                    ) : null}
-                  </div>
+                  {showImageGrid ? (
+                    <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
+                      <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
+                      <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
+                      {turn.status === "queued" ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 text-stone-500">
+                          <Clock3 className="size-3 text-stone-400" />
+                          等待前序任务完成
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
 
-                  <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                    {turn.images.map((image, index) => {
-                      const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
-                      if (image.status === "success" && imageSrc) {
-                        const currentIndex = allSuccessfulImages.findIndex((item) => item.id === image.id);
-                        const sizeLabel = image.b64_json ? formatBase64ImageSize(image.b64_json) : "";
-                        const dimensions = imageDimensions[image.id];
-                        const imageMeta = [sizeLabel, dimensions].filter(Boolean).join(" · ");
+                  {showImageGrid ? (
+                    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                      {turn.images.map((image, index) => {
+                        const imageSrc = image.status === "success" ? getStoredImageSrc(image) : "";
+                        if (image.status === "success" && imageSrc) {
+                          const currentIndex = allSuccessfulImages.findIndex((item) => item.id === image.id);
+                          const sizeLabel = image.b64_json ? formatBase64ImageSize(image.b64_json) : "";
+                          const dimensions = imageDimensions[image.id];
+                          const imageMeta = [sizeLabel, dimensions].filter(Boolean).join(" · ");
 
-                        return (
-                          <div
-                            key={image.id}
-                            className="break-inside-avoid"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => onOpenLightbox(allSuccessfulImages, currentIndex)}
-                              className="group block aspect-square w-full cursor-zoom-in overflow-hidden rounded-2xl"
-                            >
-                              <img
-                                src={imageSrc}
-                                alt={`Generated result ${index + 1}`}
-                                className="block h-full w-full object-cover transition duration-200 group-hover:brightness-90"
-                                onLoad={(event) => {
-                                  updateImageDimensions(
-                                    image.id,
-                                    event.currentTarget.naturalWidth,
-                                    event.currentTarget.naturalHeight,
-                                  );
-                                }}
-                              />
-                            </button>
-                            {/* 单格底部：左侧"结果 N + 尺寸"自适应截断，右侧 3 个按钮恒为图标。
-                                3 列 grid 下每格 ≈ 视口 1/3，再叠中文 label 任何断点都挤不下，
-                                曾出现"加入编辑"逐字竖排 bug。统一图标 + tooltip，按钮 shrink-0 + nowrap 兜底。 */}
-                            <div className="flex items-center gap-2 px-0.5 py-1.5 text-[10px] sm:px-1 sm:py-2 sm:text-xs">
-                              <div className="min-w-0 flex-1 truncate whitespace-nowrap text-stone-400">
-                                <span>结果 {index + 1}</span>
-                                {imageMeta ? <span className="ml-2">{imageMeta}</span> : null}
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => onContinueEdit(selectedConversation.id, image)}
-                                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
-                                  aria-label="加入编辑"
-                                  title="加入编辑"
-                                >
-                                  <Sparkles className="size-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void downloadStoredImage(image, index)}
-                                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
-                                  aria-label="下载"
-                                  title="下载"
-                                >
-                                  <Download className="size-3.5" />
-                                </button>
-                                {/* 发布到画廊。state 控制视觉与是否可点：
-                                    - idle：可点击，默认描边按钮
-                                    - publishing：禁用 + 旋转图标
-                                    - published：禁用 + 对勾，title 提示"已发布"
-                                    - unsupported：禁用 + 灰显，title 提示原因（一般是 b64 直返不带 url） */}
-                                {(() => {
-                                  const state = publishStateOf?.(image) ?? "idle";
-                                  const disabled = state !== "idle";
-                                  const Icon =
-                                    state === "publishing"
-                                      ? LoaderCircle
-                                      : state === "published"
-                                        ? Check
-                                        : Share2;
-                                  const label =
-                                    state === "publishing"
-                                      ? "发布中"
-                                      : state === "published"
-                                        ? "已发布"
-                                        : "发布画廊";
-                                  return (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        onPublishImage?.(selectedConversation.id, turn.id, image)
-                                      }
-                                      disabled={disabled}
-                                      title={
-                                        state === "unsupported"
-                                          ? "本地图片暂无法发布到画廊"
-                                          : state === "published"
-                                            ? "已发布到画廊"
-                                            : "发布到画廊"
-                                      }
-                                      className={cn(
-                                        "inline-flex size-7 shrink-0 items-center justify-center rounded-full transition",
-                                        state === "published"
-                                          ? "bg-emerald-50 text-emerald-700"
-                                          : state === "unsupported"
-                                            ? "cursor-not-allowed bg-stone-50 text-stone-300"
-                                            : "bg-stone-100 text-stone-600 hover:bg-stone-200 hover:text-stone-900",
-                                        disabled && state !== "published" && "opacity-70",
-                                      )}
-                                      aria-label={label}
-                                    >
-                                      <Icon
+                          return (
+                            <div key={image.id} className="break-inside-avoid">
+                              <button
+                                type="button"
+                                onClick={() => onOpenLightbox(allSuccessfulImages, currentIndex)}
+                                className="group block aspect-square w-full cursor-zoom-in overflow-hidden rounded-2xl"
+                              >
+                                <img
+                                  src={imageSrc}
+                                  alt={`Generated result ${index + 1}`}
+                                  className="block h-full w-full object-cover transition duration-200 group-hover:brightness-90"
+                                  onLoad={(event) => {
+                                    updateImageDimensions(
+                                      image.id,
+                                      event.currentTarget.naturalWidth,
+                                      event.currentTarget.naturalHeight,
+                                    );
+                                  }}
+                                />
+                              </button>
+                              {/* 单格底部：左侧"结果 N + 尺寸"自适应截断，右侧 3 个按钮恒为图标。
+                                  3 列 grid 下每格 ≈ 视口 1/3，再叠中文 label 任何断点都挤不下，
+                                  曾出现"加入编辑"逐字竖排 bug。统一图标 + tooltip，按钮 shrink-0 + nowrap 兜底。 */}
+                              <div className="flex items-center gap-2 px-0.5 py-1.5 text-[10px] sm:px-1 sm:py-2 sm:text-xs">
+                                <div className="min-w-0 flex-1 truncate whitespace-nowrap text-stone-400">
+                                  <span>结果 {index + 1}</span>
+                                  {imageMeta ? <span className="ml-2">{imageMeta}</span> : null}
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => onContinueEdit(selectedConversation.id, image)}
+                                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
+                                    aria-label="加入编辑"
+                                    title="加入编辑"
+                                  >
+                                    <Sparkles className="size-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void downloadStoredImage(image, index)}
+                                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
+                                    aria-label="下载"
+                                    title="下载"
+                                  >
+                                    <Download className="size-3.5" />
+                                  </button>
+                                  {/* 发布到画廊。state 控制视觉与是否可点：
+                                      - idle：可点击，默认描边按钮
+                                      - publishing：禁用 + 旋转图标
+                                      - published：禁用 + 对勾，title 提示"已发布"
+                                      - unsupported：禁用 + 灰显，title 提示原因（一般是 b64 直返不带 url） */}
+                                  {(() => {
+                                    const state = publishStateOf?.(image) ?? "idle";
+                                    const disabled = state !== "idle";
+                                    const Icon =
+                                      state === "publishing"
+                                        ? LoaderCircle
+                                        : state === "published"
+                                          ? Check
+                                          : Share2;
+                                    const label =
+                                      state === "publishing"
+                                        ? "发布中"
+                                        : state === "published"
+                                          ? "已发布"
+                                          : "发布画廊";
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onPublishImage?.(selectedConversation.id, turn.id, image)
+                                        }
+                                        disabled={disabled}
+                                        title={
+                                          state === "unsupported"
+                                            ? "本地图片暂无法发布到画廊"
+                                            : state === "published"
+                                              ? "已发布到画廊"
+                                              : "发布到画廊"
+                                        }
                                         className={cn(
-                                          "size-3.5",
-                                          state === "publishing" && "animate-spin",
+                                          "inline-flex size-7 shrink-0 items-center justify-center rounded-full transition",
+                                          state === "published"
+                                            ? "bg-emerald-50 text-emerald-700"
+                                            : state === "unsupported"
+                                              ? "cursor-not-allowed bg-stone-50 text-stone-300"
+                                              : "bg-stone-100 text-stone-600 hover:bg-stone-200 hover:text-stone-900",
+                                          disabled && state !== "published" && "opacity-70",
                                         )}
-                                      />
-                                    </button>
-                                  );
-                                })()}
+                                        aria-label={label}
+                                      >
+                                        <Icon
+                                          className={cn(
+                                            "size-3.5",
+                                            state === "publishing" && "animate-spin",
+                                          )}
+                                        />
+                                      </button>
+                                    );
+                                  })()}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        );
-                      }
+                          );
+                        }
 
                       if (image.status === "error") {
                         const errorMessage = image.error || "生成失败";
@@ -629,30 +631,31 @@ export function ImageResults({
                         );
                       }
 
-                      return (
-                        <div
-                          key={image.id}
-                          className="relative aspect-square break-inside-avoid overflow-hidden rounded-2xl bg-stone-100/80"
-                        >
-                          {turn.status === "queued" ? (
-                            <div className="flex h-full flex-col items-center justify-center gap-2 px-2 py-3 text-center text-stone-400">
-                              <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
-                                <Clock3 className="size-3.5 sm:size-4" />
-                              </span>
-                              <p className="text-[11px] leading-4 text-stone-500 sm:text-[13px]">排队中</p>
-                            </div>
-                          ) : (
-                            <>
-                              <div aria-hidden className="dot-grid-loader absolute inset-0" />
-                              <div className="absolute top-2 left-3 text-[11px] font-medium text-stone-500 sm:top-3 sm:left-4 sm:text-xs">
-                                正在创建图片
+                        return (
+                          <div
+                            key={image.id}
+                            className="relative aspect-square break-inside-avoid overflow-hidden rounded-2xl bg-stone-100/80"
+                          >
+                            {turn.status === "queued" ? (
+                              <div className="flex h-full flex-col items-center justify-center gap-2 px-2 py-3 text-center text-stone-400">
+                                <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
+                                  <Clock3 className="size-3.5 sm:size-4" />
+                                </span>
+                                <p className="text-[11px] leading-4 text-stone-500 sm:text-[13px]">排队中</p>
                               </div>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                            ) : (
+                              <>
+                                <div aria-hidden className="dot-grid-loader absolute inset-0" />
+                                <div className="absolute top-2 left-3 text-[11px] font-medium text-stone-500 sm:top-3 sm:left-4 sm:text-xs">
+                                  正在创建图片
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
 
                   {turn.status === "error" && turn.error && !isQuotaError(turn.error) ? (
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-stone-100 px-3 py-1 text-[11px] text-stone-500 sm:mt-4 sm:text-xs">
@@ -661,7 +664,7 @@ export function ImageResults({
                     </div>
                   ) : null}
 
-                  {isQuotaError(turn.error) ? null : (
+                  {isQuotaError(turn.error) || !hasRenderableImages ? null : (
                     <div className="mt-3 flex items-center gap-1.5 text-[11px] sm:mt-4">
                       <button
                         type="button"

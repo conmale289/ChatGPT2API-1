@@ -1,7 +1,8 @@
 "use client";
-import { ArrowUp, Check, ChevronDown, CornerDownRight, ImagePlus, Infinity as InfinityIcon, LoaderCircle, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, CornerDownRight, ImagePlus, Infinity as InfinityIcon, X } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,6 +27,17 @@ const SIZE_OPTIONS: SizeOption[] = [
   { value: "9:16", label: "9:16", desc: "竖版", w: 16, h: 28 },
 ];
 
+type ResolutionOption = { value: string; label: string; desc: string };
+const RESOLUTION_OPTIONS: ResolutionOption[] = [
+  { value: "", label: "自动", desc: "由上游决定" },
+  { value: "1k", label: "1K", desc: "约 1024px" },
+  { value: "2k", label: "2K", desc: "约 2048px" },
+  { value: "4k", label: "4K", desc: "尽量超清" },
+];
+
+const TEXTAREA_MIN_HEIGHT = 96;
+const TEXTAREA_MAX_HEIGHT = 360;
+
 type ReplyTarget = {
   sourcePrompt: string;
   aiMessage: string;
@@ -35,6 +47,8 @@ type ImageComposerProps = {
   prompt: string;
   imageCount: string;
   imageSize: string;
+  imageResolution: string;
+  canUseHighResolution: boolean;
   availableQuota: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -45,6 +59,7 @@ type ImageComposerProps = {
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onImageSizeChange: (value: string) => void;
+  onImageResolutionChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -55,6 +70,8 @@ export function ImageComposer({
   prompt,
   imageCount,
   imageSize,
+  imageResolution,
+  canUseHighResolution,
   availableQuota,
   activeTaskCount,
   referenceImages,
@@ -65,6 +82,7 @@ export function ImageComposer({
   onPromptChange,
   onImageCountChange,
   onImageSizeChange,
+  onImageResolutionChange,
   onSubmit,
   onPickReferenceImage,
   onReferenceImageChange,
@@ -74,12 +92,16 @@ export function ImageComposer({
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
   const [sizeMenuPos, setSizeMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [isResolutionMenuOpen, setIsResolutionMenuOpen] = useState(false);
+  const [resolutionMenuPos, setResolutionMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [isCountMenuOpen, setIsCountMenuOpen] = useState(false);
   const [countMenuPos, setCountMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
   const sizeMenuRef = useRef<HTMLDivElement>(null);
   const sizeMenuBtnRef = useRef<HTMLButtonElement>(null);
+  const resolutionMenuRef = useRef<HTMLDivElement>(null);
+  const resolutionMenuBtnRef = useRef<HTMLButtonElement>(null);
   const countMenuRef = useRef<HTMLDivElement>(null);
   const countMenuBtnRef = useRef<HTMLButtonElement>(null);
   const lightboxImages = useMemo(
@@ -87,7 +109,22 @@ export function ImageComposer({
     [referenceImages],
   );
   const selectedSize = SIZE_OPTIONS.find((option) => option.value === imageSize) ?? SIZE_OPTIONS[0];
+  const selectedResolution = RESOLUTION_OPTIONS.find((option) => option.value === imageResolution) ?? RESOLUTION_OPTIONS[0];
   const parsedCount = Math.max(1, Math.min(8, Number(imageCount) || 1));
+  const isResolutionDisabled = (value: string) => !canUseHighResolution && (value === "2k" || value === "4k");
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(
+      Math.max(textarea.scrollHeight, TEXTAREA_MIN_HEIGHT),
+      TEXTAREA_MAX_HEIGHT,
+    );
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
+  }, [prompt, replyTarget, referenceImages.length, textareaRef]);
 
   useEffect(() => {
     if (!isSizeMenuOpen) {
@@ -103,6 +140,21 @@ export function ImageComposer({
       window.removeEventListener("mousedown", handlePointerDown);
     };
   }, [isSizeMenuOpen]);
+
+  useEffect(() => {
+    if (!isResolutionMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!resolutionMenuRef.current?.contains(event.target as Node)) {
+        setIsResolutionMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [isResolutionMenuOpen]);
 
   useEffect(() => {
     if (!isCountMenuOpen) {
@@ -246,6 +298,7 @@ export function ImageComposer({
         <div
           className={cn(
             "relative overflow-hidden rounded-[28px] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_24px_rgba(15,23,42,0.08)] transition sm:rounded-[32px]",
+            activeTaskCount > 0 && "image-composer-running",
             isDraggingOver && "ring-2 ring-stone-900/70 ring-offset-2 ring-offset-white",
           )}
           onDragEnter={handleDragEnter}
@@ -316,10 +369,10 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[82px] resize-none rounded-[24px] border-0 bg-transparent px-4 pt-4 pb-2 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[148px] sm:rounded-[32px] sm:px-6 sm:pt-6 sm:pb-20 sm:leading-7"
+              className="hide-scrollbar min-h-[82px] resize-none overflow-hidden rounded-[24px] border-0 bg-transparent px-4 pt-4 pb-2 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[96px] sm:rounded-[32px] sm:px-6 sm:pt-6 sm:pb-2 sm:leading-7"
             />
 
-            <div className="rounded-b-[24px] border-t border-stone-100 bg-white px-3 pb-3 pt-2 sm:absolute sm:inset-x-0 sm:bottom-0 sm:rounded-b-none sm:border-t-0 sm:bg-gradient-to-t sm:from-white sm:via-white/95 sm:to-transparent sm:px-6 sm:pb-4 sm:pt-6" onClick={(event) => event.stopPropagation()}>
+            <div className="rounded-b-[24px] border-t border-stone-100 bg-white px-3 pb-3 pt-2 sm:border-t-0 sm:px-6 sm:pb-5 sm:pt-3" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-end justify-between gap-2 sm:gap-3">
                 <div className="hide-scrollbar flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:pb-0">
                   <button
@@ -339,13 +392,6 @@ export function ImageComposer({
                       <span className="font-data tabular-nums text-stone-900">{availableQuota}</span>
                     )}
                   </span>
-                  {activeTaskCount > 0 && (
-                    <span className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-3 text-[12px] font-medium text-amber-700 ring-1 ring-amber-100 sm:h-10 sm:px-3.5 sm:text-[13px]">
-                      <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.25} />
-                      <span className="font-data tabular-nums">{activeTaskCount}</span>
-                      <span className="hidden sm:inline">处理中</span>
-                    </span>
-                  )}
                   <div className="relative shrink-0">
                     <button
                       ref={countMenuBtnRef}
@@ -531,6 +577,97 @@ export function ImageComposer({
                     ) : null}
                   </div>
 
+                  <div className="relative shrink-0">
+                    <button
+                      ref={resolutionMenuBtnRef}
+                      type="button"
+                      className={cn(
+                        "inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition sm:h-10 sm:gap-2 sm:px-4 sm:text-[13px]",
+                        isResolutionMenuOpen
+                          ? "bg-stone-900 text-white"
+                          : "bg-stone-100 text-stone-700 hover:bg-stone-200",
+                      )}
+                      onClick={() => {
+                        if (!isResolutionMenuOpen && resolutionMenuBtnRef.current) {
+                          const rect = resolutionMenuBtnRef.current.getBoundingClientRect();
+                          const menuWidth = Math.min(220, window.innerWidth - 32);
+                          setResolutionMenuPos({
+                            top: rect.top - 8,
+                            left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)),
+                          });
+                        }
+                        setIsResolutionMenuOpen((open) => !open);
+                      }}
+                    >
+                      <span className={cn("hidden sm:inline", isResolutionMenuOpen ? "text-white/70" : "text-stone-500")}>清晰度</span>
+                      <span className="font-data tabular-nums">{selectedResolution.label}</span>
+                      <ChevronDown
+                        className={cn(
+                          "size-3.5 shrink-0 opacity-60 transition",
+                          isResolutionMenuOpen && "rotate-180",
+                        )}
+                      />
+                    </button>
+                    {isResolutionMenuOpen ? (
+                      <div
+                        ref={resolutionMenuRef}
+                        className="fixed z-[80] max-h-[55dvh] overflow-y-auto rounded-2xl border border-stone-200/70 bg-white p-1.5 shadow-[0_2px_4px_rgba(15,23,42,0.04),0_24px_48px_-16px_rgba(15,23,42,0.18)]"
+                        style={{
+                          top: resolutionMenuPos.top,
+                          left: resolutionMenuPos.left,
+                          transform: "translateY(-100%)",
+                          width: "min(220px, calc(100vw - 2rem))",
+                        }}
+                      >
+                        <div className="mb-1 px-2 pt-1 text-[11px] font-medium text-stone-400">目标清晰度</div>
+                        {RESOLUTION_OPTIONS.map((option) => {
+                          const active = option.value === imageResolution;
+                          const disabled = isResolutionDisabled(option.value);
+                          return (
+                            <button
+                              key={option.label}
+                              type="button"
+                              disabled={disabled}
+                              className={cn(
+                                "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition",
+                                disabled && "cursor-not-allowed opacity-40",
+                                !disabled && "cursor-pointer",
+                                active ? "bg-stone-900 text-white" : "text-stone-700",
+                                !active && !disabled && "hover:bg-stone-100",
+                              )}
+                              onClick={() => {
+                                if (disabled) return;
+                                onImageResolutionChange(option.value);
+                                setIsResolutionMenuOpen(false);
+                              }}
+                            >
+                              <span
+                                className={cn(
+                                  "font-data flex h-8 w-10 shrink-0 items-center justify-center rounded-md text-[12px] font-semibold tabular-nums",
+                                  active ? "bg-white/10 text-white" : "bg-stone-100 text-stone-700",
+                                )}
+                              >
+                                {option.label}
+                              </span>
+                              <span className="flex min-w-0 flex-1 flex-col">
+                                <span className="text-[13px] font-semibold">{option.label}</span>
+                                <span
+                                  className={cn(
+                                    "truncate text-[11px]",
+                                    active ? "text-white/70" : "text-stone-400",
+                                  )}
+                                >
+                                  {option.desc}
+                                </span>
+                              </span>
+                              {active ? <Check className="size-3.5 shrink-0" /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+
                 </div>
 
                 <button
@@ -550,4 +687,3 @@ export function ImageComposer({
     </div>
   );
 }
-

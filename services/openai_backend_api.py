@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import time
@@ -14,7 +15,7 @@ from PIL import Image
 from services.account_service import account_service
 from services.config import config
 from services.proxy_service import proxy_settings
-from utils.helper import ensure_ok, iter_sse_payloads, new_uuid
+from utils.helper import ensure_ok, iter_sse_payloads, new_uuid, split_image_model
 from utils.log import logger
 from utils.pow import build_legacy_requirements_token, build_proof_token, parse_pow_resources
 from utils.turnstile import solve_turnstile_token
@@ -38,6 +39,66 @@ DEFAULT_CLIENT_VERSION = "prod-be885abbfcfe7b1f511e88b3003d9ee44757fbad"
 DEFAULT_CLIENT_BUILD_NUMBER = "5955942"
 DEFAULT_POW_SCRIPT = "https://chatgpt.com/backend-api/sentinel/sdk.js"
 CODEX_IMAGE_MODEL = "codex-gpt-image-2"
+CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.5"
+CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant."
+CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
+SEARCH_MODEL = "gpt-5-5"
+SEARCH_TIMEOUT_SECS = 300.0
+SEARCH_POLL_INTERVAL_SECS = 0.8
+SEARCH_DONE_STATUS = {"finished_successfully", "finished_partial_completion"}
+SEARCH_CONVERSATION_ID_RE = re.compile(r'"conversation_id"\s*:\s*"([^"]+)"')
+SEARCH_URL_RE = re.compile(r"https?://[^\s\"'<>）)\]}]+")
+
+
+def refresh_codex_oauth_token(refresh_token: str, client_id: str = "") -> Dict[str, Any]:
+    refresh_token = str(refresh_token or "").strip()
+    if not refresh_token:
+        raise RuntimeError("refresh_token is required")
+    client_id = str(client_id or "").strip() or CODEX_OAUTH_CLIENT_ID
+    session = requests.Session(**proxy_settings.build_session_kwargs(verify=True))
+    try:
+        response = session.post(
+            CODEX_OAUTH_TOKEN_URL,
+            data={
+                "client_id": client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": "openid profile email",
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            timeout=60,
+        )
+    finally:
+        session.close()
+    if response.status_code != 200:
+        raise RuntimeError(f"oauth refresh failed: HTTP {response.status_code}, body={response.text[:200]}")
+    payload = response.json()
+    if not isinstance(payload, dict) or not payload.get("access_token"):
+        raise RuntimeError("oauth refresh response missing access_token")
+    now = int(time.time())
+    expires_in = int(payload.get("expires_in") or 0)
+    result = {
+        "access_token": str(payload.get("access_token") or "").strip(),
+        "refresh_token": str(payload.get("refresh_token") or refresh_token).strip(),
+        "id_token": str(payload.get("id_token") or "").strip() or None,
+        "token_type": str(payload.get("token_type") or "").strip() or None,
+        "expires_in": expires_in,
+        "expires_at": now + expires_in if expires_in > 0 else None,
+        "client_id": client_id,
+        "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "source_type": "codex",
+    }
+    auth_claims = OpenAIBackendAPI._decode_jwt_payload(str(result.get("access_token") or "")).get("https://api.openai.com/auth")
+    if isinstance(auth_claims, dict):
+        result["account_id"] = str(auth_claims.get("chatgpt_account_id") or "").strip() or None
+    id_claims = OpenAIBackendAPI._decode_jwt_payload(str(result.get("id_token") or ""))
+    if id_claims:
+        result["email"] = str(id_claims.get("email") or "").strip() or None
+    return result
 
 
 class OpenAIBackendAPI:
@@ -138,6 +199,56 @@ class OpenAIBackendAPI:
         headers["X-OpenAI-Target-Route"] = path
         if extra:
             headers.update(extra)
+        return headers
+
+    @staticmethod
+    def _decode_jwt_payload(token: str) -> Dict[str, Any]:
+        parts = str(token or "").split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8")
+            data = json.loads(decoded)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    @classmethod
+    def _chatgpt_account_id(cls, token: str) -> str:
+        auth = cls._decode_jwt_payload(token).get("https://api.openai.com/auth")
+        if isinstance(auth, dict):
+            return str(auth.get("chatgpt_account_id") or "").strip()
+        return ""
+
+    def _codex_headers(self, path: str, installation_id: str) -> Dict[str, str]:
+        """构造 Codex Responses 请求头。"""
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "originator": "Codex Desktop",
+            "x-openai-internal-codex-residency": "us",
+            "x-client-request-id": new_uuid(),
+            "x-codex-installation-id": installation_id,
+            "OpenAI-Beta": "responses_websockets=2026-02-06",
+            "User-Agent": "Codex Desktop/26.519.81530 (win32; x64)",
+            "sec-ch-ua": '"Chromium";v="146", "Not:A-Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Accept-Language": "en-US,en;q=0.9",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Origin": self.base_url,
+            "Referer": self.base_url + "/",
+            "X-OpenAI-Target-Path": path,
+            "X-OpenAI-Target-Route": path,
+        }
+        account_id = self._chatgpt_account_id(self.access_token)
+        if account_id:
+            headers["ChatGPT-Account-Id"] = account_id
         return headers
 
     @staticmethod
@@ -287,18 +398,39 @@ class OpenAIBackendAPI:
             headers["OpenAI-Sentinel-SO-Token"] = requirements.so_token
         return self._headers(path, headers)
 
-    def _api_messages_to_conversation_messages(self, messages: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    def _api_messages_to_conversation_messages(
+            self,
+            messages: list[Dict[str, Any]],
+            system_hints: Optional[list[str]] = None,
+    ) -> list[Dict[str, Any]]:
         """把标准 chat messages 转成 web conversation 所需的 messages。"""
+        system_hints = system_hints or []
         conversation_messages = []
-        for item in messages:
+        last_user_index = max(
+            (idx for idx, item in enumerate(messages) if str(item.get("role") or "user") == "user"),
+            default=-1,
+        )
+        for idx, item in enumerate(messages):
             role = item.get("role", "user")
             content = item.get("content", "")
+            metadata = None
+            if system_hints and idx == last_user_index and role == "user":
+                metadata = {
+                    "developer_mode_connector_ids": [],
+                    "selected_github_repos": [],
+                    "selected_all_github_repos": False,
+                    "system_hints": system_hints,
+                    "serialization_metadata": {"custom_symbol_offsets": []},
+                }
             if isinstance(content, str):
-                conversation_messages.append({
+                message = {
                     "id": new_uuid(),
                     "author": {"role": role},
                     "content": {"content_type": "text", "parts": [content]},
-                })
+                }
+                if metadata:
+                    message["metadata"] = metadata
+                conversation_messages.append(message)
                 continue
             if not isinstance(content, list):
                 raise RuntimeError("only string or list message content is supported")
@@ -316,11 +448,14 @@ class OpenAIBackendAPI:
                     if isinstance(data, (bytes, bytearray)):
                         image_inputs.append((bytes(data), mime))
             if not image_inputs:
-                conversation_messages.append({
+                message = {
                     "id": new_uuid(),
                     "author": {"role": role},
                     "content": {"content_type": "text", "parts": ["".join(text_parts)]},
-                })
+                }
+                if metadata:
+                    message["metadata"] = metadata
+                conversation_messages.append(message)
                 continue
             if not self.access_token:
                 raise RuntimeError("authenticated upstream account required for image input")
@@ -342,7 +477,7 @@ class OpenAIBackendAPI:
             text = "".join(text_parts)
             if text:
                 parts.append(text)
-            conversation_messages.append({
+            message = {
                 "id": new_uuid(),
                 "author": {"role": role},
                 "content": {"content_type": "multimodal_text", "parts": parts},
@@ -356,20 +491,27 @@ class OpenAIBackendAPI:
                         "height": ref["height"],
                     } for ref in uploaded],
                 },
-            })
+            }
+            if metadata:
+                message["metadata"].update(metadata)
+            conversation_messages.append(message)
         return conversation_messages
 
     def _conversation_payload(self, messages: list[Dict[str, Any]], model: str, timezone: str,
-                              history_and_training_disabled: bool = True) -> Dict[str, Any]:
+                              history_and_training_disabled: bool = True,
+                              system_hints: Optional[list[str]] = None,
+                              conversation_id: str = "",
+                              parent_message_id: str = "") -> Dict[str, Any]:
         """把标准 messages 构造成 web 对话请求体。
 
         history_and_training_disabled=True 走临时聊天链路（默认，给 /v1/* 兼容接口用）；
         =False 才会拿到带 conversation_id 的常规会话，也是触发 image_gen 工具的前提。"""
-        return {
+        system_hints = system_hints or []
+        payload = {
             "action": "next",
-            "messages": self._api_messages_to_conversation_messages(messages),
+            "messages": self._api_messages_to_conversation_messages(messages, system_hints),
             "model": model,
-            "parent_message_id": new_uuid(),
+            "parent_message_id": parent_message_id or new_uuid(),
             "conversation_mode": {"kind": "primary_assistant"},
             "conversation_origin": None,
             "force_paragen": False,
@@ -379,8 +521,8 @@ class OpenAIBackendAPI:
             "history_and_training_disabled": history_and_training_disabled,
             "reset_rate_limits": False,
             "suggestions": [],
-            "supported_encodings": [],
-            "system_hints": [],
+            "supported_encodings": ["v1"] if system_hints else [],
+            "system_hints": system_hints,
             "timezone": timezone,
             "timezone_offset_min": -480,
             "variant_purpose": "comparison_implicit",
@@ -395,16 +537,39 @@ class OpenAIBackendAPI:
                 "screen_width": 2560,
             },
         }
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
+        return payload
+
+    def _conversation_parent_message_id(self, conversation_id: str) -> str:
+        if not conversation_id:
+            return ""
+        conversation = self._get_conversation(conversation_id)
+        current_node = str(conversation.get("current_node") or "").strip()
+        if current_node:
+            return current_node
+        mapping = conversation.get("mapping") if isinstance(conversation.get("mapping"), dict) else {}
+        latest_id = ""
+        latest_time = -1.0
+        for node_id, node in mapping.items():
+            message = (node or {}).get("message") if isinstance(node, dict) else None
+            if not isinstance(message, dict):
+                continue
+            create_time = float(message.get("create_time") or 0.0)
+            if create_time >= latest_time:
+                latest_time = create_time
+                latest_id = str(node_id or message.get("id") or "")
+        return latest_id
 
     def _image_model_slug(self, model: str) -> str:
         """把标准图片模型名映射到底层 model slug。"""
-        model = str(model or "").strip()
-        if not model:
+        _, base_model = split_image_model(model)
+        if not base_model:
             return "auto"
-        if model == "gpt-image-2":
+        if base_model == "gpt-image-2":
             return "gpt-5-3"
-        if model == CODEX_IMAGE_MODEL:
-            return model
+        if base_model == CODEX_IMAGE_MODEL:
+            return base_model
         return "auto"
 
     def _image_headers(self, path: str, requirements: ChatRequirements, conduit_token: str = "", accept: str = "*/*") -> \
@@ -426,11 +591,20 @@ class OpenAIBackendAPI:
     def _prepare_image_conversation(self, prompt: str, requirements: ChatRequirements, model: str) -> str:
         """为图片生成准备 conduit token。"""
         path = "/backend-api/f/conversation/prepare"
+        model_slug = self._image_model_slug(model)
+        logger.info({
+            "event": "image_web_prepare_request",
+            "path": path,
+            "model": model,
+            "model_slug": model_slug,
+            "system_hints": ["picture_v2"],
+            "prompt_length": len(prompt or ""),
+        })
         payload = {
             "action": "next",
             "fork_from_shared_post": False,
             "parent_message_id": new_uuid(),
-            "model": self._image_model_slug(model),
+            "model": model_slug,
             "client_prepare_state": "success",
             "timezone_offset_min": -480,
             "timezone": "Asia/Shanghai",
@@ -452,7 +626,15 @@ class OpenAIBackendAPI:
             timeout=60,
         )
         ensure_ok(response, path)
-        return response.json().get("conduit_token", "")
+        conduit_token = str(response.json().get("conduit_token") or "")
+        logger.info({
+            "event": "image_web_prepare_response",
+            "path": path,
+            "model": model,
+            "model_slug": model_slug,
+            "has_conduit_token": bool(conduit_token),
+        })
+        return conduit_token
 
     def _decode_image_base64(self, image: str) -> bytes:
         """把 base64 图片字符串或本地路径解码成二进制。"""
@@ -529,10 +711,19 @@ class OpenAIBackendAPI:
             "height": height,
         }
 
-    def _start_image_generation(self, prompt: str, requirements: ChatRequirements, conduit_token: str, model: str,
-                                references: Optional[list[Dict[str, Any]]] = None) -> requests.Response:
+    def _start_image_generation(
+            self,
+            prompt: str,
+            requirements: ChatRequirements,
+            conduit_token: str,
+            model: str,
+            references: Optional[list[Dict[str, Any]]] = None,
+            image_size: str | None = None,
+            image_resolution: str | None = None,
+    ) -> requests.Response:
         """启动图片生成或编辑的 SSE 请求。"""
         references = references or []
+        model_slug = self._image_model_slug(model)
         parts = [{
             "content_type": "image_asset_pointer",
             "asset_pointer": f"file-service://{item['file_id']}",
@@ -569,7 +760,7 @@ class OpenAIBackendAPI:
                 "metadata": metadata,
             }],
             "parent_message_id": new_uuid(),
-            "model": self._image_model_slug(model),
+            "model": model_slug,
             "client_prepare_state": "sent",
             "timezone_offset_min": -480,
             "timezone": "Asia/Shanghai",
@@ -592,6 +783,20 @@ class OpenAIBackendAPI:
             "force_parallel_switch": "auto",
         }
         path = "/backend-api/f/conversation"
+        logger.info({
+            "event": "image_web_generation_request",
+            "path": path,
+            "model": model,
+            "model_slug": model_slug,
+            "requested_size": image_size or "",
+            "requested_resolution": image_resolution or "",
+            "system_hints": payload.get("system_hints"),
+            "metadata_system_hints": metadata.get("system_hints"),
+            "reference_count": len(references),
+            "content_type": content.get("content_type"),
+            "prompt_length": len(prompt or ""),
+            "has_conduit_token": bool(conduit_token),
+        })
         response = self.session.post(
             self.base_url + path,
             headers=self._image_headers(path, requirements, conduit_token, "text/event-stream"),
@@ -637,9 +842,45 @@ class OpenAIBackendAPI:
                 for hit in sed_pat.findall(text):
                     if hit not in sediment_ids:
                         sediment_ids.append(hit)
-            records.append(
-                {"message_id": message_id, "create_time": message.get("create_time") or 0, "file_ids": file_ids,
-                 "sediment_ids": sediment_ids})
+            parts_summary = []
+            for part in content.get("parts") or []:
+                if isinstance(part, dict):
+                    parts_summary.append({
+                        "content_type": part.get("content_type") or "",
+                        "asset_pointer": part.get("asset_pointer") or "",
+                        "width": part.get("width"),
+                        "height": part.get("height"),
+                        "size_bytes": part.get("size_bytes") or part.get("size"),
+                    })
+                    continue
+                parts_summary.append({"type": type(part).__name__, "length": len(str(part or ""))})
+            record = {
+                "message_id": message_id,
+                "create_time": message.get("create_time") or 0,
+                "file_ids": file_ids,
+                "sediment_ids": sediment_ids,
+                "metadata": {
+                    key: metadata.get(key)
+                    for key in (
+                        "async_task_type",
+                        "status",
+                        "model_slug",
+                        "image_generation_model",
+                        "image_size",
+                        "size",
+                        "width",
+                        "height",
+                    )
+                    if key in metadata
+                },
+                "parts": parts_summary,
+            }
+            logger.debug({
+                "event": "image_tool_record",
+                "message_id": message_id,
+                "record": record,
+            })
+            records.append(record)
         return sorted(records, key=lambda item: item["create_time"])
 
     def _poll_image_results(self, conversation_id: str, timeout_secs: float = 120.0) -> tuple[list[str], list[str]]:
@@ -789,6 +1030,373 @@ class OpenAIBackendAPI:
             images.append(response.content)
         return images
 
+    def generate_codex_image(
+            self,
+            prompt: str,
+            image_size: str,
+            model: str = "gpt-image-2",
+            images: Optional[list[str]] = None,
+            quality: str | None = None,
+            output_format: str | None = None,
+            background: str | None = None,
+    ) -> list[Dict[str, Any]]:
+        """通过 Codex Responses image_generation 工具生成图片。"""
+        if not self.access_token:
+            raise RuntimeError("access_token is required for codex image generation")
+        images = images or []
+        path = "/backend-api/codex/responses"
+        installation_id = new_uuid()
+        content: list[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+        for image in images:
+            content.append({
+                "type": "input_image",
+                "image_url": "data:image/png;base64," + image,
+                "detail": "auto",
+            })
+        tool: Dict[str, Any] = {
+            "type": "image_generation",
+            "model": model or "gpt-image-2",
+            "size": image_size,
+        }
+        if quality:
+            tool["quality"] = quality
+        if output_format:
+            tool["output_format"] = output_format
+        if background:
+            tool["background"] = background
+        body = {
+            "model": CODEX_IMAGE_RESPONSES_MODEL,
+            "input": [{"role": "user", "content": content}],
+            "instructions": CODEX_IMAGE_INSTRUCTIONS,
+            "tools": [tool],
+            "tool_choice": {"type": "image_generation"},
+            "stream": True,
+            "store": False,
+            "client_metadata": {"x-codex-installation-id": installation_id},
+        }
+        logger.info({
+            "event": "codex_image_generation_request",
+            "path": path,
+            "responses_model": CODEX_IMAGE_RESPONSES_MODEL,
+            "image_model": tool["model"],
+            "image_size": image_size,
+            "input_image_count": len(images),
+            "prompt_length": len(prompt or ""),
+        })
+        response = self.session.post(
+            self.base_url + path,
+            headers=self._codex_headers(path, installation_id),
+            json=body,
+            timeout=300,
+            stream=True,
+        )
+        ensure_ok(response, path)
+        try:
+            items = self._collect_codex_image_items(iter_sse_payloads(response))
+        finally:
+            response.close()
+        logger.info({
+            "event": "codex_image_generation_response",
+            "path": path,
+            "image_size": image_size,
+            "image_count": len(items),
+        })
+        return items
+
+    def _collect_codex_image_items(self, payloads: Iterator[str]) -> list[Dict[str, Any]]:
+        items: list[Dict[str, Any]] = []
+        completed_output: list[Dict[str, Any]] = []
+        for payload_text in payloads:
+            if payload_text == "[DONE]":
+                break
+            try:
+                payload = json.loads(payload_text)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            event_type = str(payload.get("type") or "")
+            if event_type in {"response.failed", "error"}:
+                error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+                message = str(error.get("message") or payload.get("message") or "Codex image generation failed")
+                raise RuntimeError(message)
+            if event_type == "response.output_item.done":
+                item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+                if item.get("type") == "image_generation_call" and item.get("result"):
+                    items.append(dict(item))
+                continue
+            if event_type == "response.completed":
+                response = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+                output = response.get("output") if isinstance(response.get("output"), list) else []
+                completed_output = [dict(item) for item in output if isinstance(item, dict)]
+        if items:
+            return items
+        return [
+            item
+            for item in completed_output
+            if item.get("type") == "image_generation_call" and item.get("result")
+        ]
+
+    def search(
+            self,
+            prompt: str,
+            model: str = SEARCH_MODEL,
+            timeout_secs: float = SEARCH_TIMEOUT_SECS,
+            poll_interval_secs: float = SEARCH_POLL_INTERVAL_SECS,
+    ) -> Dict[str, Any]:
+        if not self.access_token:
+            raise RuntimeError("access_token is required for search")
+        conduit_token = self._prepare_search_conversation(prompt, model)
+        self._bootstrap()
+        conversation_id = self._run_search_conversation(prompt, conduit_token, model)
+        return self._wait_search_result(conversation_id, timeout_secs, poll_interval_secs)
+
+    def stream_search_payloads(
+            self,
+            prompt: str,
+            model: str = SEARCH_MODEL,
+    ) -> Iterator[str]:
+        if not self.access_token:
+            raise RuntimeError("access_token is required for search")
+        conduit_token = self._prepare_search_conversation(prompt, model)
+        self._bootstrap()
+        response = self._start_search_conversation(prompt, conduit_token, model)
+        ensure_ok(response, "/backend-api/f/conversation")
+        try:
+            yield from iter_sse_payloads(response)
+        finally:
+            response.close()
+
+    def _prepare_search_conversation(self, prompt: str, model: str) -> str:
+        path = "/backend-api/f/conversation/prepare"
+        response = self.session.post(
+            self.base_url + path,
+            headers=self._headers(path, {
+                "Accept": "*/*",
+                "Content-Type": "application/json",
+                "X-Conduit-Token": "no-token",
+            }),
+            json={
+                "action": "next",
+                "fork_from_shared_post": False,
+                "parent_message_id": "client-created-root",
+                "model": model,
+                "client_prepare_state": "success",
+                "timezone_offset_min": -480,
+                "timezone": "Asia/Shanghai",
+                "conversation_mode": {"kind": "primary_assistant"},
+                "system_hints": ["search"],
+                "partial_query": {
+                    "id": new_uuid(),
+                    "author": {"role": "user"},
+                    "content": {"content_type": "text", "parts": [prompt]},
+                },
+                "supports_buffering": True,
+                "supported_encodings": ["v1"],
+                "client_contextual_info": {"app_name": "chatgpt.com"},
+            },
+            timeout=60,
+        )
+        ensure_ok(response, path)
+        token = str(response.json().get("conduit_token") or "")
+        if not token:
+            raise RuntimeError("missing conduit_token")
+        return token
+
+    def _start_search_conversation(self, prompt: str, conduit_token: str, model: str):
+        requirements = self._get_chat_requirements()
+        path = "/backend-api/f/conversation"
+        return self.session.post(
+            self.base_url + path,
+            headers=self._image_headers(path, requirements, conduit_token, "text/event-stream"),
+            json={
+                "action": "next",
+                "messages": [{
+                    "id": new_uuid(),
+                    "author": {"role": "user"},
+                    "create_time": time.time(),
+                    "content": {"content_type": "text", "parts": [prompt]},
+                    "metadata": {
+                        "developer_mode_connector_ids": [],
+                        "selected_github_repos": [],
+                        "selected_all_github_repos": False,
+                        "system_hints": ["search"],
+                        "serialization_metadata": {"custom_symbol_offsets": []},
+                    },
+                }],
+                "parent_message_id": "client-created-root",
+                "model": model,
+                "client_prepare_state": "success",
+                "timezone_offset_min": -480,
+                "timezone": "Asia/Shanghai",
+                "conversation_mode": {"kind": "primary_assistant"},
+                "enable_message_followups": True,
+                "system_hints": [],
+                "supports_buffering": True,
+                "supported_encodings": ["v1"],
+                "force_use_search": True,
+                "client_reported_search_source": "conversation_composer_web_icon",
+                "client_contextual_info": {
+                    "is_dark_mode": False,
+                    "time_since_loaded": 36,
+                    "page_height": 925,
+                    "page_width": 886,
+                    "pixel_ratio": 2,
+                    "screen_height": 1440,
+                    "screen_width": 2560,
+                    "app_name": "chatgpt.com",
+                },
+                "paragen_cot_summary_display_override": "allow",
+                "force_parallel_switch": "auto",
+            },
+            timeout=300,
+            stream=True,
+        )
+
+    def _run_search_conversation(self, prompt: str, conduit_token: str, model: str) -> str:
+        path = "/backend-api/f/conversation"
+        response = self._start_search_conversation(prompt, conduit_token, model)
+        ensure_ok(response, path)
+        conversation_id = ""
+        try:
+            for payload in iter_sse_payloads(response):
+                conversation_id = conversation_id or self._find_search_value(payload, "conversation_id")
+                if payload == "[DONE]":
+                    break
+        finally:
+            response.close()
+        if not conversation_id:
+            raise RuntimeError("conversation_id not found in stream")
+        return conversation_id
+
+    def _wait_search_result(
+            self,
+            conversation_id: str,
+            timeout_secs: float,
+            poll_interval_secs: float,
+    ) -> Dict[str, Any]:
+        deadline = time.time() + timeout_secs
+        last_result: Dict[str, Any] | None = None
+        last_answer = ""
+        stable_hits = 0
+        while time.time() < deadline:
+            try:
+                last_result = self._extract_search_result(
+                    conversation_id,
+                    self._get_search_conversation(conversation_id),
+                )
+            except RuntimeError as exc:
+                text = str(exc)
+                if not any(f"status={code}" in text for code in (404, 409, 423, 429, 500, 502, 503, 504)):
+                    raise
+            if last_result and last_result.get("answer"):
+                if last_result.get("status") in SEARCH_DONE_STATUS:
+                    return last_result
+                answer = str(last_result.get("answer") or "")
+                stable_hits = stable_hits + 1 if answer == last_answer else 0
+                last_answer = answer
+                if stable_hits >= 2:
+                    return last_result
+            time.sleep(poll_interval_secs)
+        if last_result:
+            return last_result
+        raise RuntimeError(f"timed out waiting for search result: {conversation_id}")
+
+    def _get_search_conversation(self, conversation_id: str) -> Dict[str, Any]:
+        path = f"/backend-api/conversation/{conversation_id}"
+        headers = self._headers(path, {"Accept": "*/*"})
+        headers["Referer"] = f"{self.base_url}/c/{conversation_id}"
+        headers["X-OpenAI-Target-Route"] = "/backend-api/conversation/{conversation_id}"
+        response = self.session.get(self.base_url + path, headers=headers, timeout=60)
+        ensure_ok(response, path)
+        return response.json()
+
+    def _extract_search_result(self, conversation_id: str, conversation: Dict[str, Any]) -> Dict[str, Any]:
+        messages = []
+        for node in (conversation.get("mapping") or {}).values():
+            message = (node or {}).get("message") or {}
+            if ((message.get("author") or {}).get("role") or "") == "assistant":
+                messages.append(message)
+        message = max(messages, key=lambda item: float(item.get("create_time") or 0.0)) if messages else {}
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        finish_details = metadata.get("finish_details") if isinstance(metadata.get("finish_details"), dict) else {}
+        answer = self._search_message_text(message)
+        sources = self._extract_search_sources(message)
+        for url in SEARCH_URL_RE.findall(answer):
+            url = self._clean_search_url(url)
+            if url and all(item["url"] != url for item in sources):
+                sources.append({"title": "", "url": url, "snippet": "", "source_type": ""})
+        return {
+            "conversation_id": conversation_id,
+            "status": str(
+                finish_details.get("type")
+                or metadata.get("status")
+                or self._find_search_value(message, "status")
+                or ""
+            ).strip(),
+            "answer": answer,
+            "sources": sources,
+            "assistant_message_id": str(message.get("id") or ""),
+            "create_time": float(message.get("create_time") or 0.0),
+        }
+
+    def _extract_search_sources(self, payload: Any) -> list[Dict[str, str]]:
+        sources: list[Dict[str, str]] = []
+        for obj in self._walk_search_dicts(payload):
+            metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+            url = self._clean_search_url(obj.get("url") or obj.get("link") or obj.get("source_url") or metadata.get("url"))
+            if url and all(item["url"] != url for item in sources):
+                sources.append({
+                    "title": str(obj.get("title") or obj.get("name") or obj.get("source") or "").strip(),
+                    "url": url,
+                    "snippet": str(obj.get("snippet") or obj.get("text") or obj.get("description") or "").strip(),
+                    "source_type": str(obj.get("type") or obj.get("source_type") or "").strip(),
+                })
+        return sources
+
+    def _search_message_text(self, message: Any) -> str:
+        content = message.get("content") if isinstance(message, dict) else {}
+        parts = []
+        if isinstance(content, dict):
+            if isinstance(content.get("text"), str):
+                parts.append(content["text"])
+            for part in content.get("parts") or []:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    parts.extend(str(part.get(key) or "") for key in ("text", "summary", "content") if part.get(key))
+        elif isinstance(content, str):
+            parts.append(content)
+        return "\n".join(part.strip() for part in parts if str(part).strip()).strip()
+
+    def _find_search_value(self, payload: Any, key: str) -> str:
+        if isinstance(payload, str):
+            match = SEARCH_CONVERSATION_ID_RE.search(payload) if key == "conversation_id" else None
+            if match:
+                return match.group(1)
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return ""
+        if isinstance(payload, dict):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+            return next((found for item in payload.values() if (found := self._find_search_value(item, key))), "")
+        if isinstance(payload, list):
+            return next((found for item in payload if (found := self._find_search_value(item, key))), "")
+        return ""
+
+    def _walk_search_dicts(self, payload: Any) -> list[Dict[str, Any]]:
+        if isinstance(payload, dict):
+            return [payload, *(item for value in payload.values() for item in self._walk_search_dicts(value))]
+        if isinstance(payload, list):
+            return [item for value in payload for item in self._walk_search_dicts(value)]
+        return []
+
+    def _clean_search_url(self, value: Any) -> str:
+        return str(value or "").strip().rstrip(".,;，。；")
+
     def stream_conversation(
             self,
             messages: Optional[list[Dict[str, Any]]] = None,
@@ -797,17 +1405,36 @@ class OpenAIBackendAPI:
             images: Optional[list[str]] = None,
             system_hints: Optional[list[str]] = None,
             history_and_training_disabled: bool = True,
+            conversation_id: str = "",
+            image_size: str | None = None,
+            image_resolution: str | None = None,
     ) -> Iterator[str]:
         system_hints = system_hints or []
         if "picture_v2" in system_hints:
-            yield from self._stream_picture_conversation(prompt, model, images or [])
+            yield from self._stream_picture_conversation(
+                prompt,
+                model,
+                images or [],
+                image_size=image_size,
+                image_resolution=image_resolution,
+            )
             return
 
         normalized = messages or [{"role": "user", "content": prompt}]
         self._bootstrap()
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
-        payload = self._conversation_payload(normalized, model, timezone, history_and_training_disabled)
+        upstream_cid = str(conversation_id or "").strip()
+        parent_message_id = self._conversation_parent_message_id(upstream_cid) if upstream_cid else ""
+        payload = self._conversation_payload(
+            normalized,
+            model,
+            timezone,
+            history_and_training_disabled,
+            system_hints,
+            upstream_cid,
+            parent_message_id,
+        )
         response = self.session.post(
             self.base_url + path,
             headers=self._conversation_headers(path, requirements),
@@ -844,14 +1471,33 @@ class OpenAIBackendAPI:
             prompt: str,
             model: str,
             images: list[str],
+            image_size: str | None = None,
+            image_resolution: str | None = None,
     ) -> Iterator[str]:
         if not self.access_token:
             raise RuntimeError("access_token is required for image endpoints")
+        logger.info({
+            "event": "image_web_stream_start",
+            "model": model,
+            "model_slug": self._image_model_slug(model),
+            "requested_size": image_size or "",
+            "requested_resolution": image_resolution or "",
+            "reference_count": len(images),
+            "route": "/backend-api/f/conversation",
+        })
         references = [self._upload_image(image, f"image_{idx}.png") for idx, image in enumerate(images, start=1)]
         self._bootstrap()
         requirements = self._get_chat_requirements()
         conduit_token = self._prepare_image_conversation(prompt, requirements, model)
-        response = self._start_image_generation(prompt, requirements, conduit_token, model, references)
+        response = self._start_image_generation(
+            prompt,
+            requirements,
+            conduit_token,
+            model,
+            references,
+            image_size=image_size,
+            image_resolution=image_resolution,
+        )
         try:
             yield from iter_sse_payloads(response)
         finally:

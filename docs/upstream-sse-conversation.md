@@ -294,11 +294,11 @@ SSE 结束后可按以下顺序判断结果：
 
 清洗后视频类引用以 `[[N]](https://www.youtube.com/watch?v=...)` 形式落在 markdown 里。OpenAI 兼容协议本身只走文本，**视频卡片是前端渲染层的事**，后端不变。
 
-本项目自带的 web 前端（`web/src/app/chat/page.tsx`）通过 `ReactMarkdown` 的 `components.a` 钩子识别 YouTube 链接，命中时把 `<a>` 替换成 `VideoCard` 组件：
+本项目自带的 web 前端（`web/src/app/chat/page.tsx`）通过 `ReactMarkdown` 的 `components.a` 钩子识别视频链接，命中时把 `<a>` 替换成 `VideoCard` 组件：
 
-- 解析逻辑：`web/src/lib/video.ts` 的 `parseVideoUrl`，认 `youtube.com/watch?v=`、`youtu.be/`、`/embed/`、`/shorts/` 各种形式。
-- 缩略图：从 video id 直接拼 `https://img.youtube.com/vi/{id}/hqdefault.jpg`，零依赖。
-- 播放：点击切换为 `youtube-nocookie.com/embed/{id}?autoplay=1` 的 iframe，内联播放。
+- 解析逻辑：`web/src/lib/video.ts` 的 `parseVideoUrl`，认 YouTube（`youtube.com/watch?v=`、`youtu.be/`、`/embed/`、`/shorts/`）和 Bilibili（`bilibili.com/video/BV...`、`/video/av...`、`b23.tv` 短链）。
+- 缩略图：YouTube 从 video id 直接拼 `https://img.youtube.com/vi/{id}/hqdefault.jpg`；Bilibili 通过 `/api/video/metadata` 由后端解析封面和标题。
+- 播放：点击切换为对应站点的 iframe，内联播放。
 - 同消息内同 video id 去重：第一次出现渲染卡片，后续仍以普通链接呈现。
 - 非视频链接（普通 URL）正常按 `<a>` 渲染，不受影响。
 

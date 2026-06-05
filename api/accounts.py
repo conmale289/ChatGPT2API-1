@@ -28,6 +28,7 @@ from services.sub2api_service import (
 class UserKeyCreateRequest(BaseModel):
     name: str = ""
     key: str = ""
+    account_tier: str = "free"
     image_daily_quota: int = 0
     image_daily_unlimited: bool = True
     image_monthly_quota: int = 0
@@ -46,6 +47,7 @@ class UserKeyUpdateRequest(BaseModel):
     name: str | None = None
     enabled: bool | None = None
     key: str | None = None
+    account_tier: str | None = None
     image_daily_quota: int | None = None
     image_daily_unlimited: bool | None = None
     image_monthly_quota: int | None = None
@@ -72,6 +74,8 @@ class UserKeyRegenerateRequest(BaseModel):
 
 class AccountCreateRequest(BaseModel):
     tokens: list[str] = Field(default_factory=list)
+    account_records: list[dict] = Field(default_factory=list)
+    source_type: str = "web"
 
 
 class AccountDeleteRequest(BaseModel):
@@ -149,6 +153,9 @@ def create_router() -> APIRouter:
                 "id": item_id,
                 "name": identity.get("name"),
                 "role": identity.get("role"),
+                "account_tier": "premium",
+                "can_use_paid_image_accounts": True,
+                "can_use_high_resolution": True,
             }
             for kind in (
                 "image_daily",
@@ -176,6 +183,7 @@ def create_router() -> APIRouter:
                 role="user",
                 name=body.name,
                 key=body.key,
+                account_tier=body.account_tier,
                 image_daily_quota=max(0, int(body.image_daily_quota or 0)),
                 image_daily_unlimited=bool(body.image_daily_unlimited),
                 image_monthly_quota=max(0, int(body.image_monthly_quota or 0)),
@@ -262,9 +270,18 @@ def create_router() -> APIRouter:
     async def create_accounts(body: AccountCreateRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
+        account_records = [record for record in body.account_records if isinstance(record, dict)]
+        for record in account_records:
+            token = str(record.get("access_token") or record.get("accessToken") or "").strip()
+            if token:
+                tokens.append(token)
+        tokens = list(dict.fromkeys(tokens))
         if not tokens:
-            raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        result = account_service.add_accounts(tokens)
+            raise HTTPException(status_code=400, detail={"error": "tokens or account_records is required"})
+        source_type = str(body.source_type or "web").strip().lower() or "web"
+        if source_type not in {"web", "codex"}:
+            raise HTTPException(status_code=400, detail={"error": "source_type must be web or codex"})
+        result = account_service.add_accounts(tokens, account_records=account_records, source_type=source_type)
         refresh_result = account_service.refresh_accounts(tokens)
         return {
             **result,

@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from api.support import require_admin, require_identity, resolve_image_base_url
+from api.support import can_use_paid_image_accounts, require_admin, require_identity, resolve_image_base_url
 from services.auth_service import auth_service
 from services.backup_service import BackupError, backup_service
 from services.config import config
@@ -72,6 +72,9 @@ def create_router(app_version: str) -> APIRouter:
             "role": identity.get("role"),
             "subject_id": identity.get("id"),
             "name": identity.get("name"),
+            "account_tier": "premium" if can_use_paid_image_accounts(identity) else "free",
+            "can_use_paid_image_accounts": can_use_paid_image_accounts(identity),
+            "can_use_high_resolution": can_use_paid_image_accounts(identity),
         }
 
     @router.get("/version")

@@ -45,7 +45,9 @@ import {
 
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
+const IMAGE_RESOLUTION_STORAGE_KEY = "chatgpt2api:image_last_resolution";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
+const HIGH_RESOLUTION_VALUES = new Set(["2k", "4k"]);
 // 每个会话的滚动位置单独存。用 sessionStorage 因为这就是"会话级"的临时位置，
 // 关浏览器后从底部重看更自然；要跨浏览器会话保留改成 localStorage 即可。
 const SCROLL_POSITION_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
@@ -53,6 +55,11 @@ const SCROLL_POSITION_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 function clampImageCount(value: string) {
   return String(Math.min(100, Math.max(1, Math.floor(Number(value) || 1))));
 }
+
+function isHighResolution(value: string | null | undefined) {
+  return HIGH_RESOLUTION_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
 const activeConversationQueueIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
@@ -396,6 +403,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
   const [imageSize, setImageSize] = useState("");
+  const [imageResolution, setImageResolution] = useState("");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -403,6 +411,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
+  const [canUseHighResolution, setCanUseHighResolution] = useState(isAdmin);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -547,8 +556,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const loadHistory = async () => {
       try {
         const storedSize = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_SIZE_STORAGE_KEY) : null;
+        const storedResolution =
+          typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_RESOLUTION_STORAGE_KEY) : null;
         const storedCount = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_COUNT_STORAGE_KEY) : null;
         setImageSize(storedSize || "");
+        setImageResolution(storedResolution || "");
         setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
         // 滚动位置表只在浏览器侧、首次进入时加载一次
@@ -615,6 +627,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       // 管理员密钥层面是全档不限额，画图能力的真实瓶颈在号池而非密钥额度。
       // 顶部展示的是"我自己这把密钥的画图额度"，所以直接显示 ∞——
       // 号池可用量在「号池管理」页有更准确的视图。
+      setCanUseHighResolution(true);
       setAvailableQuota("∞");
       return;
     }
@@ -622,6 +635,16 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     // 否则取最小剩余作为可用画图张数——这样按钮禁用与上游 402 分支保持一致。
     try {
       const { identity } = await fetchMyIdentity();
+      const canHighResolution = Boolean(
+        identity.role === "admin" ||
+          identity.can_use_high_resolution ||
+          identity.can_use_paid_image_accounts ||
+          identity.account_tier === "premium",
+      );
+      setCanUseHighResolution(canHighResolution);
+      if (!canHighResolution) {
+        setImageResolution((prev) => (isHighResolution(prev) ? "" : prev));
+      }
       const candidates: number[] = [];
       if (!identity.image_daily_unlimited) {
         candidates.push(
@@ -779,6 +802,28 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   }, [imageSize]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!canUseHighResolution && isHighResolution(imageResolution)) {
+      window.localStorage.removeItem(IMAGE_RESOLUTION_STORAGE_KEY);
+      return;
+    }
+    if (imageResolution) {
+      window.localStorage.setItem(IMAGE_RESOLUTION_STORAGE_KEY, imageResolution);
+      return;
+    }
+    window.localStorage.removeItem(IMAGE_RESOLUTION_STORAGE_KEY);
+  }, [canUseHighResolution, imageResolution]);
+
+  useEffect(() => {
+    if (!canUseHighResolution && isHighResolution(imageResolution)) {
+      setImageResolution("");
+    }
+  }, [canUseHighResolution, imageResolution]);
+
+  useEffect(() => {
     if (typeof window !== "undefined" && parsedCount > 0) {
       window.localStorage.setItem(IMAGE_COUNT_STORAGE_KEY, String(parsedCount));
     }
@@ -827,13 +872,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const clearComposerInputs = useCallback(() => {
     setImagePrompt("");
+    setImageResolution((prev) => (!canUseHighResolution && isHighResolution(prev) ? "" : prev));
     setReferenceImageFiles([]);
     setReferenceImages([]);
     setReplyTarget(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  }, []);
+  }, [canUseHighResolution]);
 
   const resetComposer = useCallback(() => {
     clearComposerInputs();
@@ -1195,6 +1241,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     setImagePrompt(turn.prompt);
     setImageCount(String(Math.max(1, turn.count || turn.images.length || 1)));
     setImageSize(turn.size);
+    setImageResolution(!canUseHighResolution && isHighResolution(turn.resolution) ? "" : turn.resolution || "");
     setReferenceImages(turn.referenceImages);
     setReferenceImageFiles(
       turn.referenceImages.map((image) => dataUrlToFile(image.dataUrl, image.name, image.type)),
@@ -1204,7 +1251,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
     textareaRef.current?.focus();
     toast.success("已复用这条提示词配置");
-  }, []);
+  }, [canUseHighResolution]);
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
     if (images.length === 0) {
@@ -1323,8 +1370,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           pendingImages.map((image) => {
             const taskId = image.taskId || image.id;
             return activeTurn.mode === "edit"
-              ? createImageEditTask(taskId, referenceFiles, apiPrompt, activeTurn.model, activeTurn.size)
-              : createImageGenerationTask(taskId, apiPrompt, activeTurn.model, activeTurn.size);
+              ? createImageEditTask(taskId, referenceFiles, apiPrompt, activeTurn.model, activeTurn.size, activeTurn.resolution)
+              : createImageGenerationTask(taskId, apiPrompt, activeTurn.model, activeTurn.size, activeTurn.resolution);
           }),
         );
         await applyTasks(submitted);
@@ -1352,8 +1399,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             const resubmitted = await Promise.all(
               missingImages.map((image) =>
                 activeTurn.mode === "edit"
-                  ? createImageEditTask(image.taskId || image.id, referenceFiles, apiPrompt, activeTurn.model, activeTurn.size)
-                  : createImageGenerationTask(image.taskId || image.id, apiPrompt, activeTurn.model, activeTurn.size),
+                  ? createImageEditTask(image.taskId || image.id, referenceFiles, apiPrompt, activeTurn.model, activeTurn.size, activeTurn.resolution)
+                  : createImageGenerationTask(image.taskId || image.id, apiPrompt, activeTurn.model, activeTurn.size, activeTurn.resolution),
               ),
             );
             if (resubmitted.length > 0) {
@@ -1549,6 +1596,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       referenceImages: effectiveImageMode === "edit" ? referenceImages : [],
       count: parsedCount,
       size: imageSize,
+      resolution: canUseHighResolution || !isHighResolution(imageResolution) ? imageResolution : "",
       images: createLoadingImages(turnId, parsedCount),
       createdAt: now,
       status: "queued",
@@ -1727,6 +1775,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               prompt={imagePrompt}
               imageCount={imageCount}
               imageSize={imageSize}
+              imageResolution={imageResolution}
+              canUseHighResolution={canUseHighResolution}
               availableQuota={availableQuota}
               activeTaskCount={activeTaskCount}
               referenceImages={referenceImages}
@@ -1750,6 +1800,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               onPromptChange={setImagePrompt}
               onImageCountChange={(value) => setImageCount(value ? clampImageCount(value) : "")}
               onImageSizeChange={setImageSize}
+              onImageResolutionChange={setImageResolution}
               onSubmit={handleSubmit}
               onPickReferenceImage={() => fileInputRef.current?.click()}
               onReferenceImageChange={handleReferenceImageChange}

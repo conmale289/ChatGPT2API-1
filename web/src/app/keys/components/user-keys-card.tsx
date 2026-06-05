@@ -56,6 +56,7 @@ import {
   fetchUserKeys,
   regenerateUserKey,
   updateUserKey,
+  type AccountTier,
   type UserKey,
   type UserKeyCreatePayload,
   type UserKeyUpdatePayload,
@@ -207,6 +208,7 @@ type EditFormState = Record<
   QuotaKind,
   { quota: string; mode: "add" | "set"; unlimited: boolean; resetUsed: boolean }
 >;
+type QuotaValidationState = Record<QuotaKind, { quota: number; unlimited: boolean }>;
 
 function defaultCreateForm(): CreateFormState {
   return {
@@ -229,6 +231,26 @@ function buildEditForm(item: UserKey): EditFormState {
     };
     return acc;
   }, {} as EditFormState);
+}
+
+function validateQuotaHierarchy(values: QuotaValidationState): string | null {
+  const checks: Array<[QuotaKind, QuotaKind, string, string]> = [
+    ["image_daily", "image_monthly", "画图日限额", "画图月限额"],
+    ["image_daily", "image_total", "画图日限额", "画图总额度"],
+    ["image_monthly", "image_total", "画图月限额", "画图总额度"],
+    ["chat_daily", "chat_monthly", "对话日限额", "对话月限额"],
+    ["chat_daily", "chat_total", "对话日限额", "对话总额度"],
+    ["chat_monthly", "chat_total", "对话月限额", "对话总额度"],
+  ];
+  for (const [smaller, larger, smallerLabel, largerLabel] of checks) {
+    const smallerConf = values[smaller];
+    const largerConf = values[larger];
+    if (smallerConf.unlimited || largerConf.unlimited) continue;
+    if (smallerConf.quota > largerConf.quota) {
+      return `${smallerLabel}不能大于${largerLabel}`;
+    }
+  }
+  return null;
 }
 
 function formatDateTime(value?: string | null) {
@@ -258,6 +280,14 @@ async function copyToClipboard(value: string) {
 }
 
 const PAGE_SIZE_OPTIONS = ["10", "20", "50", "100"] as const;
+const ACCOUNT_TIER_OPTIONS: Array<{ value: AccountTier; label: string; hint: string }> = [
+  { value: "free", label: "普通", hint: "仅使用 free 账号" },
+  { value: "premium", label: "高级", hint: "可使用 Plus / Pro" },
+];
+
+function accountTierLabel(value?: string) {
+  return value === "premium" ? "高级" : "普通";
+}
 
 export function UserKeysCard() {
   const didLoadRef = useRef(false);
@@ -271,6 +301,7 @@ export function UserKeysCard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [customKey, setCustomKey] = useState("");
+  const [accountTier, setAccountTier] = useState<AccountTier>("free");
   const [createForm, setCreateForm] = useState<CreateFormState>(defaultCreateForm);
   const [isCreating, setIsCreating] = useState(false);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
@@ -279,6 +310,7 @@ export function UserKeysCard() {
   const [editingItem, setEditingItem] = useState<UserKey | null>(null);
   const [editName, setEditName] = useState("");
   const [editKey, setEditKey] = useState("");
+  const [editAccountTier, setEditAccountTier] = useState<AccountTier>("free");
   const [editForm, setEditForm] = useState<EditFormState | null>(null);
 
   const setItems = (next: UserKey[]) => {
@@ -354,7 +386,20 @@ export function UserKeysCard() {
       toast.error("请至少为画图或对话开启一个可用额度");
       return;
     }
-    const payload: UserKeyCreatePayload = { name: name.trim() };
+    const nextQuotaState = ALL_QUOTA_KINDS.reduce<QuotaValidationState>((acc, meta) => {
+      const conf = createForm[meta.kind];
+      acc[meta.kind] = {
+        quota: conf.unlimited ? 0 : readNumber(conf.quota),
+        unlimited: conf.unlimited,
+      };
+      return acc;
+    }, {} as QuotaValidationState);
+    const quotaError = validateQuotaHierarchy(nextQuotaState);
+    if (quotaError) {
+      toast.error(quotaError);
+      return;
+    }
+    const payload: UserKeyCreatePayload = { name: name.trim(), account_tier: accountTier };
     const trimmedKey = customKey.trim();
     if (trimmedKey) payload.key = trimmedKey;
     const view = payload as Record<string, unknown>;
@@ -370,6 +415,7 @@ export function UserKeysCard() {
       setRevealedKey(data.key);
       setName("");
       setCustomKey("");
+      setAccountTier("free");
       setCreateForm(defaultCreateForm());
       setIsDialogOpen(false);
       toast.success("用户密钥已创建");
@@ -422,12 +468,14 @@ export function UserKeysCard() {
     setEditingItem(item);
     setEditName(item.name);
     setEditKey("");
+    setEditAccountTier(item.account_tier ?? "free");
     setEditForm(buildEditForm(item));
   };
 
   const closeEditDialog = () => {
     setEditingItem(null);
     setEditKey("");
+    setEditAccountTier("free");
     setEditForm(null);
   };
 
@@ -440,8 +488,17 @@ export function UserKeysCard() {
     const view = payload as Record<string, unknown>;
     if (trimmedName !== item.name) payload.name = trimmedName;
     if (trimmedKey) payload.key = trimmedKey;
+    if (editAccountTier !== (item.account_tier ?? "free")) payload.account_tier = editAccountTier;
 
     let quotaTouched = false;
+    let quotaConfigTouched = false;
+    const nextQuotaState = ALL_QUOTA_KINDS.reduce<QuotaValidationState>((acc, meta) => {
+      acc[meta.kind] = {
+        quota: readNumber(item[meta.quotaField]),
+        unlimited: Boolean(item[meta.unlimitedField]),
+      };
+      return acc;
+    }, {} as QuotaValidationState);
     // 取消"不限额"但没填新值的字段：聚合后统一报错，避免用户额度被静默改成 0。
     const missingValueLabels: string[] = [];
     for (const meta of ALL_QUOTA_KINDS) {
@@ -466,11 +523,16 @@ export function UserKeysCard() {
           nextQuota = inputNum;
         }
       }
+      nextQuotaState[meta.kind] = {
+        quota: nextUnlimited ? 0 : nextQuota,
+        unlimited: nextUnlimited,
+      };
 
       if (nextUnlimited && !currentUnlimited) {
         // 切到不限：明确发 unlimited=true；quota 由后端忽略，不需要再发。
         view[meta.unlimitedPayload] = true;
         quotaTouched = true;
+        quotaConfigTouched = true;
       } else if (!nextUnlimited && currentUnlimited) {
         // 切到限额：必须给一个 > 0 的具体值，否则用户拿到的是 0 额度，立刻不可用。
         if (inputRaw === "" || nextQuota <= 0) {
@@ -480,10 +542,12 @@ export function UserKeysCard() {
         view[meta.unlimitedPayload] = false;
         view[meta.quotaPayload] = nextQuota;
         quotaTouched = true;
+        quotaConfigTouched = true;
       } else if (!nextUnlimited && nextQuota !== currentQuota) {
         // 同样限额、quota 真的变了才发；覆盖模式下输入与当前值相同会落到这里被忽略，符合预期。
         view[meta.quotaPayload] = nextQuota;
         quotaTouched = true;
+        quotaConfigTouched = true;
       }
 
       if (conf.resetUsed) {
@@ -496,8 +560,15 @@ export function UserKeysCard() {
       toast.error(`${missingValueLabels.join("、")}：取消「不限额」时必须填一个大于 0 的额度`);
       return;
     }
+    if (quotaConfigTouched) {
+      const quotaError = validateQuotaHierarchy(nextQuotaState);
+      if (quotaError) {
+        toast.error(quotaError);
+        return;
+      }
+    }
 
-    if (!payload.name && !payload.key && !quotaTouched) {
+    if (!payload.name && !payload.key && !payload.account_tier && !quotaTouched) {
       // 真没改任何东西：静默关闭，不打扰用户。
       // 上面如果只是覆盖模式输入了与当前值相同的数字，也会落到这里——这是预期行为。
       closeEditDialog();
@@ -716,56 +787,71 @@ export function UserKeysCard() {
           if (!open) {
             setName("");
             setCustomKey("");
+            setAccountTier("free");
             setCreateForm(defaultCreateForm());
           }
         }}
       >
-        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl p-6 sm:max-w-3xl">
-          <DialogHeader className="gap-2">
-            <DialogTitle>创建用户密钥</DialogTitle>
-            <DialogDescription className="text-sm leading-6">
-              画图与对话独立计费，各支持日限额、月限额、总额度三档；任一档可单独勾选「不限额」。
-              创建后会生成一条只能查看一次的原始密钥。
-            </DialogDescription>
+        <DialogContent className="w-[min(94vw,980px)] max-h-[90vh] gap-0 overflow-hidden rounded-[24px] bg-white p-0 sm:max-w-none">
+          <DialogHeader className="border-b border-stone-200/80 bg-stone-50/70 px-6 py-5 pr-14 sm:px-7">
+            <div className="flex items-start gap-4">
+              <div className="grid size-11 shrink-0 place-items-center rounded-2xl border border-stone-200 bg-white text-stone-800 shadow-sm">
+                <KeyRound className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <DialogTitle className="text-[22px] leading-7">创建用户密钥</DialogTitle>
+                <DialogDescription className="mt-1 max-w-2xl text-sm leading-6 text-stone-500">
+                  配置用户身份、账号权限与独立额度。创建后会生成一条只能查看一次的原始密钥。
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">名称（可选）</label>
-              <Input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="例如：设计同学 A、运营临时账号"
-                className="h-11 rounded-xl border-stone-200 bg-white"
+          <div className="max-h-[calc(90vh-154px)] overflow-y-auto px-6 py-5 sm:px-7">
+            <div className="space-y-5">
+              <section className="space-y-4">
+                <SectionHeading title="密钥档案" hint="名称用于后台识别；自定义密钥留空时自动生成。" />
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">名称</label>
+                    <Input
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder="例如：设计同学 A、运营临时账号"
+                      className="h-12 rounded-2xl border-stone-200 bg-white shadow-none"
+                    />
+                  </div>
+                  <AccountTierSelect value={accountTier} onChange={setAccountTier} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">自定义密钥</label>
+                  <Input
+                    value={customKey}
+                    onChange={(event) => setCustomKey(event.target.value)}
+                    placeholder="留空则自动生成，例如：sk-your-custom-user-key"
+                    className="h-12 rounded-2xl border-stone-200 bg-white font-mono text-[13px] shadow-none"
+                  />
+                  <p className="text-xs leading-5 text-stone-500">
+                    填写后以该值创建；不能与管理员密钥或其他用户密钥重复。
+                  </p>
+                </div>
+              </section>
+              <QuotaGroupCreate
+                title="画图额度"
+                groupHint="与画图工作台、/v1/images/* 共享。"
+                kinds={IMAGE_QUOTA_KINDS}
+                form={createForm}
+                onChange={updateCreateField}
+              />
+              <QuotaGroupCreate
+                title="对话额度"
+                groupHint="POST /api/chat/stream 每次请求扣 1。"
+                kinds={CHAT_QUOTA_KINDS}
+                form={createForm}
+                onChange={updateCreateField}
               />
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">自定义密钥（可选）</label>
-              <Input
-                value={customKey}
-                onChange={(event) => setCustomKey(event.target.value)}
-                placeholder="留空则自动生成，例如：sk-your-custom-user-key"
-                className="h-11 rounded-xl border-stone-200 bg-white font-mono"
-              />
-              <p className="text-xs leading-5 text-stone-500">
-                填了就以此为准；不能与管理员密钥或其他用户密钥重复。
-              </p>
-            </div>
-            <QuotaGroupCreate
-              title="画图额度"
-              groupHint="按生成图片张数计数；与画图工作台、/v1/images/* 共享。"
-              kinds={IMAGE_QUOTA_KINDS}
-              form={createForm}
-              onChange={updateCreateField}
-            />
-            <QuotaGroupCreate
-              title="对话额度"
-              groupHint="POST /api/chat/stream 每次请求扣 1。"
-              kinds={CHAT_QUOTA_KINDS}
-              form={createForm}
-              onChange={updateCreateField}
-            />
           </div>
-          <DialogFooter>
+          <DialogFooter className="border-t border-stone-200/80 bg-white px-6 py-4 sm:px-7">
             <Button
               type="button"
               variant="secondary"
@@ -824,57 +910,72 @@ export function UserKeysCard() {
       </Dialog>
 
       <Dialog open={Boolean(editingItem)} onOpenChange={(open) => (!open ? closeEditDialog() : null)}>
-        <DialogContent className="max-h-[88vh] overflow-y-auto rounded-2xl p-6 sm:max-w-3xl">
-          <DialogHeader className="gap-2">
-            <DialogTitle>编辑用户密钥</DialogTitle>
-            <DialogDescription className="text-sm leading-6">
-              可以修改备注名称、各档额度、不限额开关，或更换专用密钥。空白栏位保持当前值不变。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">名称</label>
-              <Input
-                value={editName}
-                onChange={(event) => setEditName(event.target.value)}
-                placeholder="例如：设计同学 A、运营临时账号"
-                className="h-11 rounded-xl border-stone-200 bg-white"
-              />
+        <DialogContent className="w-[min(94vw,980px)] max-h-[90vh] gap-0 overflow-hidden rounded-[24px] bg-white p-0 sm:max-w-none">
+          <DialogHeader className="border-b border-stone-200/80 bg-stone-50/70 px-6 py-5 pr-14 sm:px-7">
+            <div className="flex items-start gap-4">
+              <div className="grid size-11 shrink-0 place-items-center rounded-2xl border border-stone-200 bg-white text-stone-800 shadow-sm">
+                <KeyRound className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <DialogTitle className="text-[22px] leading-7">编辑用户密钥</DialogTitle>
+                <DialogDescription className="mt-1 max-w-2xl text-sm leading-6 text-stone-500">
+                  调整身份、权限、额度和专用密钥。空白额度栏位保持当前值不变。
+                </DialogDescription>
+              </div>
             </div>
-            {editingItem && editForm ? (
-              <>
-                <QuotaGroupEdit
-                  title="画图额度"
-                  groupHint="按生成图片张数计数。"
-                  kinds={IMAGE_QUOTA_KINDS}
-                  item={editingItem}
-                  form={editForm}
-                  onChange={updateEditField}
+          </DialogHeader>
+          <div className="max-h-[calc(90vh-154px)] overflow-y-auto px-6 py-5 sm:px-7">
+            <div className="space-y-5">
+              <section className="space-y-4">
+                <SectionHeading title="密钥档案" hint={editingItem ? `ID ${editingItem.id}` : "基础信息"} />
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">名称</label>
+                    <Input
+                      value={editName}
+                      onChange={(event) => setEditName(event.target.value)}
+                      placeholder="例如：设计同学 A、运营临时账号"
+                      className="h-12 rounded-2xl border-stone-200 bg-white shadow-none"
+                    />
+                  </div>
+                  <AccountTierSelect value={editAccountTier} onChange={setEditAccountTier} />
+                </div>
+              </section>
+              {editingItem && editForm ? (
+                <>
+                  <QuotaGroupEdit
+                    title="画图额度"
+                    groupHint="按生成图片张数计数。"
+                    kinds={IMAGE_QUOTA_KINDS}
+                    item={editingItem}
+                    form={editForm}
+                    onChange={updateEditField}
+                  />
+                  <QuotaGroupEdit
+                    title="对话额度"
+                    groupHint="POST /api/chat/stream 每次请求扣 1。"
+                    kinds={CHAT_QUOTA_KINDS}
+                    item={editingItem}
+                    form={editForm}
+                    onChange={updateEditField}
+                  />
+                </>
+              ) : null}
+              <section className="space-y-3">
+                <SectionHeading title="密钥替换" hint="留空则不变；保存后旧密钥立即失效。" />
+                <Input
+                  value={editKey}
+                  onChange={(event) => setEditKey(event.target.value)}
+                  placeholder="例如：sk-your-custom-user-key"
+                  className="h-12 rounded-2xl border-stone-200 bg-white font-mono text-[13px] shadow-none"
                 />
-                <QuotaGroupEdit
-                  title="对话额度"
-                  groupHint="POST /api/chat/stream 每次请求扣 1。"
-                  kinds={CHAT_QUOTA_KINDS}
-                  item={editingItem}
-                  form={editForm}
-                  onChange={updateEditField}
-                />
-              </>
-            ) : null}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">新的专用密钥（可选）</label>
-              <Input
-                value={editKey}
-                onChange={(event) => setEditKey(event.target.value)}
-                placeholder="例如：sk-your-custom-user-key"
-                className="h-11 rounded-xl border-stone-200 bg-white font-mono"
-              />
-              <p className="text-xs leading-5 text-stone-500">
-                保存后旧密钥会立即失效，新密钥生效。系统仍只保存哈希，不会回显当前密钥。
-              </p>
+                <p className="text-xs leading-5 text-stone-500">
+                  系统仍只保存哈希，不会回显当前密钥。
+                </p>
+              </section>
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="border-t border-stone-200/80 bg-white px-6 py-4 sm:px-7">
             <Button
               type="button"
               variant="secondary"
@@ -968,9 +1069,20 @@ function KeyRow({
 
   return (
     <>
-    <tr className="border-b border-stone-100 align-top text-sm even:bg-stone-50/40 hover:bg-stone-50">
+    <tr className="border-b border-stone-100 align-middle text-sm even:bg-stone-50/40 hover:bg-stone-50">
       <td className="px-4 py-3">
-        <div className="font-medium text-stone-800">{item.name}</div>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-medium text-stone-800">{item.name}</span>
+          <Badge
+            variant={item.account_tier === "premium" ? "default" : "secondary"}
+            className={cn(
+              "shrink-0 rounded-md px-1.5 py-0 text-[10px]",
+              item.account_tier === "premium" ? "bg-stone-900 text-white" : "bg-stone-100 text-stone-600",
+            )}
+          >
+            {accountTierLabel(item.account_tier)}
+          </Badge>
+        </div>
         <div className="mt-0.5 font-data text-[11px] text-stone-400">ID {item.id}</div>
       </td>
       <td className="px-4 py-3">
@@ -1132,6 +1244,53 @@ function KeyRow({
   );
 }
 
+function SectionHeading({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-2">
+      <h3 className="text-sm font-semibold text-stone-900">{title}</h3>
+      {hint ? <p className="text-xs leading-5 text-stone-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+function AccountTierSelect({
+  value,
+  onChange,
+}: {
+  value: AccountTier;
+  onChange: (value: AccountTier) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">账号权限</label>
+      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 bg-stone-50 p-1">
+        {ACCOUNT_TIER_OPTIONS.map((option) => {
+          const selected = value === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onChange(option.value)}
+              className={cn(
+                "flex min-h-11 cursor-pointer flex-col items-start justify-center rounded-xl px-3 text-left transition",
+                selected
+                  ? "bg-white text-stone-950 shadow-sm ring-1 ring-stone-200"
+                  : "text-stone-500 hover:bg-white/70 hover:text-stone-800",
+              )}
+            >
+              <span className="flex items-center gap-1.5 text-sm font-semibold">
+                {selected ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : null}
+                {option.label}
+              </span>
+              <span className="mt-0.5 line-clamp-1 text-[11px] leading-4">{option.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function QuotaGroupSummary({ kinds, item }: { kinds: QuotaMeta[]; item: UserKey }) {
   return (
     <div className="space-y-1">
@@ -1189,23 +1348,39 @@ function QuotaGroupCreate({
   form: CreateFormState;
   onChange: (kind: QuotaKind, patch: Partial<CreateFormState[QuotaKind]>) => void;
 }) {
+  const GroupIcon = kinds.some((meta) => meta.kind.startsWith("image")) ? ImageIcon : MessageSquare;
+
   return (
-    <div className="rounded-xl border border-stone-200 bg-stone-50/40 p-4">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <div className="text-sm font-semibold text-stone-800">{title}</div>
-        <span className="text-xs text-stone-500">{groupHint}</span>
+    <section className="overflow-hidden rounded-[20px] border border-stone-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200/80 bg-stone-50/70 px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-9 place-items-center rounded-xl border border-stone-200 bg-white text-stone-700">
+            <GroupIcon className="size-4" />
+          </span>
+          <div>
+            <div className="text-sm font-semibold text-stone-900">{title}</div>
+            <div className="text-xs leading-5 text-stone-500">{groupHint}</div>
+          </div>
+        </div>
       </div>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="divide-y divide-stone-100">
         {kinds.map((meta) => {
           const Icon = meta.icon;
           const conf = form[meta.kind];
           return (
-            <div key={meta.kind} className="space-y-2 rounded-lg border border-stone-200 bg-white px-3 py-3">
-              <div className="flex items-center gap-2 text-sm font-medium text-stone-800">
-                <Icon className="size-4 text-stone-500" />
-                {meta.label}
+            <div
+              key={meta.kind}
+              className="grid gap-3 px-4 py-3.5 sm:grid-cols-[minmax(210px,1fr)_minmax(150px,200px)_132px] sm:items-center"
+            >
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-stone-100 text-stone-600">
+                  <Icon className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-stone-900">{meta.label}</div>
+                  <div className="mt-0.5 text-xs leading-5 text-stone-500">{meta.hint}</div>
+                </div>
               </div>
-              <p className="text-xs leading-5 text-stone-500">{meta.hint}</p>
               <Input
                 type="number"
                 min={0}
@@ -1213,20 +1388,29 @@ function QuotaGroupCreate({
                 onChange={(event) => onChange(meta.kind, { quota: event.target.value })}
                 disabled={conf.unlimited}
                 placeholder="例如：100"
-                className="h-10 rounded-lg border-stone-200 bg-white font-data tabular-nums"
+                className="h-11 rounded-xl border-stone-200 bg-stone-50/60 font-data tabular-nums shadow-none disabled:bg-stone-100"
               />
-              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-700">
+              <label
+                className={cn(
+                  "flex h-11 cursor-pointer items-center justify-between gap-2 rounded-xl border px-3 text-xs font-medium transition",
+                  conf.unlimited
+                    ? "border-stone-900 bg-stone-900 text-white"
+                    : "border-stone-200 bg-stone-50 text-stone-600 hover:bg-stone-100",
+                )}
+              >
                 <Checkbox
                   checked={conf.unlimited}
                   onCheckedChange={(checked) => onChange(meta.kind, { unlimited: Boolean(checked) })}
+                  className={cn(conf.unlimited ? "border-white bg-white text-stone-900" : "bg-white")}
                 />
-                <span>不限额度</span>
+                <span>不限额</span>
+                {conf.unlimited ? <InfinityIcon className="size-3.5" /> : null}
               </label>
             </div>
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1245,13 +1429,22 @@ function QuotaGroupEdit({
   form: EditFormState;
   onChange: (kind: QuotaKind, patch: Partial<EditFormState[QuotaKind]>) => void;
 }) {
+  const GroupIcon = kinds.some((meta) => meta.kind.startsWith("image")) ? ImageIcon : MessageSquare;
+
   return (
-    <div className="rounded-xl border border-stone-200 bg-stone-50/40 p-4">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <div className="text-sm font-semibold text-stone-800">{title}</div>
-        <span className="text-xs text-stone-500">{groupHint}</span>
+    <section className="overflow-hidden rounded-[20px] border border-stone-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200/80 bg-stone-50/70 px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-9 place-items-center rounded-xl border border-stone-200 bg-white text-stone-700">
+            <GroupIcon className="size-4" />
+          </span>
+          <div>
+            <div className="text-sm font-semibold text-stone-900">{title}</div>
+            <div className="text-xs leading-5 text-stone-500">{groupHint}</div>
+          </div>
+        </div>
       </div>
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="divide-y divide-stone-100">
         {kinds.map((meta) => (
           <EditQuotaCell
             key={meta.kind}
@@ -1262,7 +1455,7 @@ function QuotaGroupEdit({
           />
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -1284,86 +1477,104 @@ function EditQuotaCell({
   const currentRemaining = currentUnlimited ? null : Math.max(0, currentQuota - currentUsed);
   const inputNum = readNumber(value.quota);
   const previewNext = value.mode === "add" ? currentQuota + inputNum : inputNum;
+  const hasPreview = !value.unlimited && value.quota.trim() !== "";
 
   return (
-    <div className="space-y-2 rounded-lg border border-stone-200 bg-white px-3 py-3">
-      <div className="flex items-center gap-2 text-sm font-medium text-stone-800">
-        <Icon className="size-4 text-stone-500" />
-        {meta.label}
-      </div>
-      <div className="font-data tabular-nums text-[11px] text-stone-500">
-        {currentUnlimited ? (
-          <>已用 {currentUsed} · 当前不限</>
-        ) : (
-          <>
-            已用 {currentUsed} / 当前 {currentQuota}
-            <span className="ml-1 text-stone-400">（剩 {currentRemaining}）</span>
-          </>
-        )}
-      </div>
-      {!value.unlimited ? (
-        <div className="inline-flex rounded-lg border border-stone-200 bg-stone-50 p-0.5 text-xs">
-          <button
-            type="button"
-            onClick={() => onChange({ mode: "add", quota: "" })}
-            className={cn(
-              "cursor-pointer rounded-md px-2 py-1 transition",
-              value.mode === "add"
-                ? "bg-white text-stone-900 shadow-sm"
-                : "text-stone-500 hover:text-stone-700",
+    <div className="grid gap-3 px-4 py-3.5 md:grid-cols-[minmax(190px,0.72fr)_minmax(0,1.28fr)] md:items-center">
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-stone-100 text-stone-600">
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-stone-900">{meta.label}</div>
+          <div className="mt-0.5 font-data text-xs leading-5 tabular-nums text-stone-500">
+            {currentUnlimited ? (
+              <>已用 {currentUsed} · 当前不限</>
+            ) : (
+              <>
+                已用 {currentUsed} / 当前 {currentQuota}
+                <span className="ml-1 text-stone-400">剩 {currentRemaining}</span>
+              </>
             )}
-          >
-            追加
-          </button>
-          <button
-            type="button"
-            onClick={() => onChange({ mode: "set", quota: String(currentQuota) })}
-            className={cn(
-              "cursor-pointer rounded-md px-2 py-1 transition",
-              value.mode === "set"
-                ? "bg-white text-stone-900 shadow-sm"
-                : "text-stone-500 hover:text-stone-700",
-            )}
-          >
-            覆盖
-          </button>
+          </div>
         </div>
-      ) : null}
-      <Input
-        type="number"
-        min={0}
-        value={value.quota}
-        onChange={(event) => onChange({ quota: event.target.value })}
-        disabled={value.unlimited}
-        placeholder={value.mode === "add" ? "再追加多少" : "新的上限"}
-        className="h-10 rounded-lg border-stone-200 bg-white font-data tabular-nums"
-      />
-      {!value.unlimited && value.quota.trim() !== "" ? (
-        <p className="font-data tabular-nums text-[11px] text-stone-500">
-          保存后 →{" "}
-          <span className="font-semibold text-stone-700">{previewNext}</span>
-        </p>
-      ) : null}
-      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-700">
-        <Checkbox
-          checked={value.unlimited}
-          onCheckedChange={(checked) => onChange({ unlimited: Boolean(checked) })}
-        />
-        <span>不限额度</span>
-      </label>
-      <button
-        type="button"
-        onClick={() => onChange({ resetUsed: !value.resetUsed })}
-        className={cn(
-          "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] transition",
-          value.resetUsed
-            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-            : "border-stone-200 bg-white text-stone-600 hover:bg-stone-50",
-        )}
-      >
-        <RotateCcw className="size-3" />
-        {value.resetUsed ? "保存时重置已用" : "重置已用"}
-      </button>
+      </div>
+      <div className="flex min-w-0 max-w-full flex-wrap items-start justify-start gap-2 md:flex-nowrap md:justify-end">
+        {!value.unlimited ? (
+          <div className="inline-flex h-10 min-w-[124px] flex-[0_1_136px] rounded-xl border border-stone-200 bg-stone-50 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => onChange({ mode: "add", quota: "" })}
+              className={cn(
+                "min-w-14 flex-1 cursor-pointer rounded-lg px-3 transition",
+                value.mode === "add"
+                  ? "bg-white text-stone-900 shadow-sm"
+                  : "text-stone-500 hover:text-stone-700",
+              )}
+            >
+              追加
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ mode: "set", quota: String(currentQuota) })}
+              className={cn(
+                "min-w-14 flex-1 cursor-pointer rounded-lg px-3 transition",
+                value.mode === "set"
+                  ? "bg-white text-stone-900 shadow-sm"
+                  : "text-stone-500 hover:text-stone-700",
+              )}
+            >
+              覆盖
+            </button>
+          </div>
+        ) : null}
+        <div className="min-w-[132px] flex-[1_1_170px] space-y-1">
+          <Input
+            type="number"
+            min={0}
+            value={value.quota}
+            onChange={(event) => onChange({ quota: event.target.value })}
+            disabled={value.unlimited}
+            placeholder={value.mode === "add" ? "再追加多少" : "新的上限"}
+            className="h-10 rounded-xl border-stone-200 bg-stone-50/60 font-data tabular-nums shadow-none disabled:bg-stone-100"
+          />
+          {hasPreview ? (
+            <p className="font-data text-[11px] leading-4 tabular-nums text-stone-500">
+              保存后 <span className="font-semibold text-stone-800">{previewNext}</span>
+            </p>
+          ) : null}
+        </div>
+        <label
+          className={cn(
+            "flex h-10 w-[104px] shrink-0 cursor-pointer items-center justify-between gap-2 rounded-xl border px-3 text-xs font-medium whitespace-nowrap transition",
+            value.unlimited
+              ? "border-stone-900 bg-stone-900 text-white"
+              : "border-stone-200 bg-stone-50 text-stone-600 hover:bg-stone-100",
+          )}
+        >
+          <Checkbox
+            checked={value.unlimited}
+            onCheckedChange={(checked) => onChange({ unlimited: Boolean(checked) })}
+            className={cn(value.unlimited ? "border-white bg-white text-stone-900" : "bg-white")}
+          />
+          <span>不限额</span>
+          {value.unlimited ? <InfinityIcon className="size-3.5" /> : null}
+        </label>
+        <button
+          type="button"
+          onClick={() => onChange({ resetUsed: !value.resetUsed })}
+          aria-label={value.resetUsed ? "保存时重置已用额度" : "重置已用额度"}
+          title={value.resetUsed ? "保存时重置已用额度" : "重置已用额度"}
+          className={cn(
+            "inline-flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border text-xs font-medium transition",
+            value.resetUsed
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-stone-200 bg-white text-stone-600 hover:bg-stone-50",
+          )}
+        >
+          <RotateCcw className="size-3.5" />
+        </button>
+      </div>
     </div>
   );
 }

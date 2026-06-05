@@ -6,16 +6,25 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 import tiktoken
+from PIL import Image
 
 from services.account_service import account_service
 from services.config import config
 from services.openai_backend_api import OpenAIBackendAPI
 from services.protocol.chatgpt_markup import collect_references, sanitize
-from utils.helper import IMAGE_MODELS, extract_image_from_message_content
+from utils.helper import (
+    IMAGE_MODELS,
+    anonymize_token,
+    extract_image_from_message_content,
+    is_codex_image_model,
+    is_supported_image_model,
+    split_image_model,
+)
 from utils.log import logger
 
 
@@ -53,6 +62,32 @@ def is_token_invalid_error(message: str) -> bool:
         or "authentication token has been invalidated" in text
         or "invalidated oauth token" in text
     )
+
+
+def is_rate_limit_error(exc: Exception | str) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    text = str(exc or "").lower()
+    return (
+        "status=429" in text
+        or "http 429" in text
+        or "too many requests" in text
+        or "rate_limit_exceeded" in text
+        or "usage_limit_reached" in text
+    )
+
+
+def mark_image_failure(access_token: str, exc: Exception | None = None) -> None:
+    if exc is not None and is_rate_limit_error(exc):
+        account_service.mark_image_rate_limited(
+            access_token,
+            error=str(exc),
+            headers=getattr(exc, "headers", None),
+            body=getattr(exc, "body", None),
+        )
+        return
+    account_service.mark_image_result(access_token, False)
 
 
 def image_stream_error_message(message: str) -> str:
@@ -155,6 +190,143 @@ def build_image_prompt(prompt: str, size: str | None) -> str:
     return f"{prompt.strip()}\n\n{hint}"
 
 
+IMAGE_RESOLUTION_HINTS = {
+    "1k": "目标输出分辨率为 1K 级别，优先保证构图稳定和主体清晰。",
+    "2k": "目标输出分辨率为 2K 级别，尽可能输出长边约 2048px 的高清图片，保留细节纹理。",
+    "4k": "目标输出分辨率为 4K 级别，尽可能输出接近 3840px 长边的超清图片，保留丰富细节和干净边缘。",
+}
+
+
+def normalize_image_resolution(value: object) -> str | None:
+    normalized = str(value or "").strip().lower().replace(" ", "").replace("-", "")
+    aliases = {
+        "auto": "",
+        "default": "",
+        "": "",
+        "1": "1k",
+        "1024": "1k",
+        "1024px": "1k",
+        "1024x1024": "1k",
+        "1k": "1k",
+        "2": "2k",
+        "2048": "2k",
+        "2048px": "2k",
+        "2048x2048": "2k",
+        "2k": "2k",
+        "4": "4k",
+        "3840": "4k",
+        "3840px": "4k",
+        "3840x2160": "4k",
+        "2160x3840": "4k",
+        "4096": "4k",
+        "4096px": "4k",
+        "4096x4096": "4k",
+        "4k": "4k",
+    }
+    result = aliases.get(normalized)
+    if result is None:
+        return None
+    return result or None
+
+
+def build_image_prompt_with_options(prompt: str, size: str | None, resolution: str | None = None) -> str:
+    final_prompt = build_image_prompt(prompt, size).strip()
+    normalized_resolution = normalize_image_resolution(resolution)
+    if not normalized_resolution:
+        return final_prompt
+    return f"{final_prompt}\n\n{IMAGE_RESOLUTION_HINTS[normalized_resolution]}"
+
+
+def image_plan_candidates(request: "ConversationRequest") -> list[str | None]:
+    model_plan_type, _ = split_image_model(request.model)
+    allowed = normalize_allowed_image_plan_types(request.allowed_plan_types)
+    if allowed:
+        base_candidates = list(allowed)
+        if request.plan_type and (normalized_plan := normalize_image_plan_type(request.plan_type)):
+            base_candidates = [normalized_plan]
+        elif model_plan_type and (normalized_plan := normalize_image_plan_type(model_plan_type)):
+            base_candidates = [normalized_plan]
+        elif normalize_image_resolution(request.resolution) in {"2k", "4k"}:
+            base_candidates = [plan for plan in ("Pro", "Plus", "Team") if plan in allowed]
+        return [plan for plan in base_candidates if plan in allowed]
+    if request.plan_type:
+        return [request.plan_type]
+    if model_plan_type:
+        return [model_plan_type]
+    if normalize_image_resolution(request.resolution) in {"2k", "4k"}:
+        return ["Pro", "Plus", None]
+    return [None]
+
+
+def normalize_image_plan_type(value: object) -> str | None:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    compact = raw.replace("_", "")
+    return {
+        "free": "free",
+        "plus": "Plus",
+        "pro": "Pro",
+        "team": "Team",
+        "business": "Team",
+    }.get(compact)
+
+
+def normalize_allowed_image_plan_types(value: object) -> tuple[str, ...]:
+    if not value:
+        return ()
+    raw_items = value if isinstance(value, (list, tuple, set)) else [value]
+    order = ["Pro", "Plus", "Team", "free"]
+    normalized: list[str] = []
+    for item in raw_items:
+        plan = normalize_image_plan_type(item)
+        if plan and plan not in normalized:
+            normalized.append(plan)
+    return tuple(sorted(normalized, key=lambda item: order.index(item) if item in order else len(order)))
+
+
+def image_bytes_dimensions(image_data: bytes) -> tuple[int, int]:
+    try:
+        with Image.open(BytesIO(image_data)) as image:
+            width, height = image.size
+            return int(width), int(height)
+    except Exception:
+        return 0, 0
+
+
+def codex_image_size_for_request(request: "ConversationRequest") -> str | None:
+    resolution = normalize_image_resolution(request.resolution)
+    if resolution not in {"2k", "4k"}:
+        return None
+    aspect = str(request.size or "").strip()
+    table = {
+        "2k": {
+            "1:1": "2048x2048",
+            "16:9": "2048x1152",
+            "9:16": "1152x2048",
+            "4:3": "2048x1536",
+            "3:4": "1536x2048",
+            "": "2048x2048",
+        },
+        "4k": {
+            "1:1": "2048x2048",
+            "16:9": "3840x2160",
+            "9:16": "2160x3840",
+            "4:3": "3072x2304",
+            "3:4": "2304x3072",
+            "": "3840x2160",
+        },
+    }
+    return table[resolution].get(aspect) or table[resolution][""]
+
+
+def image_generation_model_for_tool(model: str) -> str:
+    _, base_model = split_image_model(model)
+    if base_model == "gpt-image-2":
+        return "gpt-image-2"
+    if base_model == "codex-gpt-image-2":
+        return "gpt-image-2"
+    return "gpt-image-2"
+
+
 def encoding_for_model(model: str):
     try:
         return tiktoken.encoding_for_model(model)
@@ -219,9 +391,13 @@ class ConversationRequest:
     model: str = "auto"
     prompt: str = ""
     messages: list[dict[str, Any]] | None = None
+    conversation_id: str = ""
+    plan_type: str | None = None
     images: list[str] | None = None
     n: int = 1
     size: str | None = None
+    resolution: str | None = None
+    allowed_plan_types: tuple[str, ...] | list[str] | set[str] | None = None
     response_format: str = "b64_json"
     base_url: str | None = None
     message_as_error: bool = False
@@ -471,18 +647,32 @@ def conversation_events(
     prompt: str = "",
     images: list[str] | None = None,
     size: str | None = None,
+    resolution: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []))
-    image_model = str(model or "").strip() in IMAGE_MODELS
+    image_model = is_supported_image_model(model)
     history_text = "" if image_model else assistant_history_text(normalized)
     history_messages = [] if image_model else assistant_history_messages(normalized)
-    final_prompt = prompt_with_global_system(build_image_prompt(prompt, size)) if image_model else prompt
+    final_prompt = prompt_with_global_system(build_image_prompt_with_options(prompt, size, resolution)) if image_model else prompt
+    if image_model:
+        logger.info({
+            "event": "image_conversation_options",
+            "model": model,
+            "requested_resolution": resolution or "",
+            "normalized_resolution": normalize_image_resolution(resolution) or "",
+            "requested_size": size or "",
+            "reference_count": len(images or []),
+            "prompt_length": len(prompt or ""),
+            "final_prompt_length": len(final_prompt or ""),
+        })
     payloads = backend.stream_conversation(
         messages=normalized,
         model=model,
         prompt=final_prompt,
         images=images if image_model else None,
         system_hints=["picture_v2"] if image_model else None,
+        image_size=size if image_model else None,
+        image_resolution=resolution if image_model else None,
     )
     yield from iter_conversation_payloads(payloads, history_text, history_messages)
 
@@ -538,6 +728,7 @@ def stream_image_outputs(
             model=request.model,
             images=request.images or [],
             size=request.size,
+            resolution=request.resolution,
     ):
         last = event
         if event.get("type") == "conversation.delta":
@@ -580,9 +771,22 @@ def stream_image_outputs(
 
     image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
     if image_urls:
+        downloaded_images = list(backend.download_image_bytes(image_urls))
+        dimensions = [image_bytes_dimensions(image_data) for image_data in downloaded_images]
+        logger.info({
+            "event": "image_stream_downloaded",
+            "conversation_id": conversation_id,
+            "requested_resolution": request.resolution or "",
+            "requested_size": request.size or "",
+            "image_count": len(downloaded_images),
+            "dimensions": [
+                {"width": width, "height": height}
+                for width, height in dimensions
+            ],
+        })
         image_items = [
             {"b64_json": base64.b64encode(image_data).decode("ascii")}
-            for image_data in backend.download_image_bytes(image_urls)
+            for image_data in downloaded_images
         ]
         data = format_image_result(
             image_items,
@@ -599,16 +803,269 @@ def stream_image_outputs(
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message)
 
 
+def stream_codex_image_outputs(
+        backend: OpenAIBackendAPI,
+        request: ConversationRequest,
+        image_size: str,
+        index: int = 1,
+        total: int = 1,
+) -> Iterator[ImageOutput]:
+    items = backend.generate_codex_image(
+        prompt=build_image_prompt(request.prompt, request.size),
+        image_size=image_size,
+        model=image_generation_model_for_tool(request.model),
+        images=request.images or [],
+    )
+    image_items = []
+    dimensions = []
+    for item in items:
+        b64_json = str(item.get("result") or "").strip()
+        if not b64_json:
+            continue
+        try:
+            image_data = base64.b64decode(b64_json)
+        except Exception:
+            continue
+        dimensions.append(image_bytes_dimensions(image_data))
+        image_items.append({
+            "b64_json": b64_json,
+            "revised_prompt": str(item.get("revised_prompt") or request.prompt).strip() or request.prompt,
+        })
+    logger.info({
+        "event": "codex_image_stream_downloaded",
+        "requested_resolution": request.resolution or "",
+        "requested_size": request.size or "",
+        "codex_size": image_size,
+        "image_count": len(image_items),
+        "dimensions": [
+            {"width": width, "height": height}
+            for width, height in dimensions
+        ],
+    })
+    data = format_image_result(
+        image_items,
+        request.prompt,
+        request.response_format,
+        request.base_url,
+        int(time.time()),
+    )["data"]
+    if data:
+        yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data)
+        return
+    raise RuntimeError("Codex image generation returned no image")
+
+
+def try_stream_codex_image_outputs_with_pool(
+        request: ConversationRequest,
+        index: int,
+        total: int,
+) -> tuple[bool, Iterator[ImageOutput] | None]:
+    image_size = codex_image_size_for_request(request)
+    if not image_size:
+        return False, None
+    candidates = image_plan_candidates(request)
+    logger.info({
+        "event": "codex_image_account_select_start",
+        "model": request.model,
+        "requested_resolution": request.resolution or "",
+        "requested_size": request.size or "",
+        "codex_size": image_size,
+        "candidate_plan_types": [plan_type or "auto" for plan_type in candidates],
+        "source_type": "codex",
+    })
+
+    def select_token(excluded_tokens: set[str]) -> tuple[str, str | None, str]:
+        plan_error = ""
+        for plan_type in candidates:
+            try:
+                access_token = account_service.get_available_access_token(
+                    plan_type=plan_type,
+                    source_type="codex",
+                    plan_types={"Plus", "Team", "Pro"} if not plan_type else None,
+                    excluded_tokens=excluded_tokens,
+                )
+                return access_token, plan_type, ""
+            except RuntimeError as exc:
+                plan_error = str(exc)
+                logger.info({
+                    "event": "codex_image_account_select_plan_unavailable",
+                    "model": request.model,
+                    "requested_resolution": request.resolution or "",
+                    "plan_type": plan_type or "auto",
+                    "error": plan_error,
+                })
+        return "", None, plan_error
+
+    excluded_tokens: set[str] = set()
+    token, selected_plan_type, plan_error = select_token(excluded_tokens)
+    if not token:
+        logger.info({
+            "event": "codex_image_account_unavailable",
+            "model": request.model,
+            "requested_resolution": request.resolution or "",
+            "codex_size": image_size,
+            "error": plan_error or "no available codex image quota",
+        })
+        return False, None
+
+    def iterator() -> Iterator[ImageOutput]:
+        nonlocal token, selected_plan_type, plan_error
+        last_rate_limit_error = ""
+        while token:
+            returned_result = False
+            original_token = token
+            active_token = token
+            refreshed_token = account_service.refresh_oauth_access_token(token)
+            if refreshed_token:
+                active_token = refreshed_token
+                excluded_tokens.add(token)
+                token = active_token
+            selected_account = account_service.get_account(active_token) or {}
+            logger.info({
+                "event": "codex_image_account_selected",
+                "model": request.model,
+                "requested_resolution": request.resolution or "",
+                "requested_size": request.size or "",
+                "codex_size": image_size,
+                "selected_plan_type": selected_plan_type or "auto",
+                "account_type": selected_account.get("type") or "",
+                "account_status": selected_account.get("status") or "",
+                "account_source_type": selected_account.get("source_type") or "",
+                "account_quota": selected_account.get("quota"),
+                "account_image_quota_unknown": bool(selected_account.get("image_quota_unknown")),
+                "token": anonymize_token(active_token),
+                "oauth_refreshed": active_token != original_token,
+            })
+            try:
+                backend = OpenAIBackendAPI(access_token=active_token)
+                for output in stream_codex_image_outputs(backend, request, image_size, index, total):
+                    returned_result = returned_result or output.kind == "result"
+                    yield output
+                account_service.mark_image_result(active_token, returned_result)
+                return
+            except Exception as exc:
+                if is_rate_limit_error(exc):
+                    last_rate_limit_error = str(exc)
+                    account_service.mark_image_rate_limited(
+                        active_token,
+                        error=last_rate_limit_error,
+                        headers=getattr(exc, "headers", None),
+                        body=getattr(exc, "body", None),
+                    )
+                    excluded_tokens.add(active_token)
+                    logger.warning({
+                        "event": "codex_image_account_rate_limited",
+                        "model": request.model,
+                        "requested_resolution": request.resolution or "",
+                        "requested_size": request.size or "",
+                        "codex_size": image_size,
+                        "token": anonymize_token(active_token),
+                        "error": last_rate_limit_error,
+                    })
+                    token, selected_plan_type, plan_error = select_token(excluded_tokens)
+                    if token:
+                        continue
+                    raise RuntimeError(
+                        last_rate_limit_error or plan_error or "no available codex image quota"
+                    ) from exc
+                mark_image_failure(active_token, exc)
+                raise
+        raise RuntimeError(last_rate_limit_error or plan_error or "no available codex image quota")
+
+    return True, iterator()
+
+
 def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:
-    if str(request.model or "").strip() not in IMAGE_MODELS:
-        raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(IMAGE_MODELS))
+    if not is_supported_image_model(request.model):
+        raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(sorted(IMAGE_MODELS)))
 
     emitted = False
     last_error = ""
+    normalized_resolution = normalize_image_resolution(request.resolution)
+    high_resolution_requested = normalized_resolution in {"2k", "4k"}
     for index in range(1, request.n + 1):
+        used_codex, codex_outputs = try_stream_codex_image_outputs_with_pool(request, index, request.n)
+        if codex_outputs is not None:
+            try:
+                for output in codex_outputs:
+                    emitted = True
+                    yield output
+                if used_codex:
+                    continue
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning({
+                    "event": "codex_image_stream_fail",
+                    "model": request.model,
+                    "requested_resolution": request.resolution or "",
+                    "error": last_error,
+                })
+                if used_codex and high_resolution_requested:
+                    message = image_stream_error_message(last_error)
+                    logger.warning({
+                        "event": "codex_image_high_resolution_failed_no_fallback",
+                        "model": request.model,
+                        "requested_resolution": request.resolution or "",
+                        "requested_size": request.size or "",
+                        "error": last_error,
+                    })
+                    raise ImageGenerationError(
+                        f"{str(normalized_resolution).upper()} 高清生成失败，未降级为普通清晰度。原因：{message}",
+                        code="high_resolution_generation_failed",
+                    ) from exc
+        attempted_image_tokens: set[str] = set()
         while True:
             try:
-                token = account_service.get_available_access_token()
+                codex_model = is_codex_image_model(request.model)
+                plan_error = ""
+                selected_plan_type: str | None = None
+                candidates = image_plan_candidates(request)
+                logger.info({
+                    "event": "image_account_select_start",
+                    "model": request.model,
+                    "requested_resolution": request.resolution or "",
+                    "requested_size": request.size or "",
+                    "candidate_plan_types": [plan_type or "auto" for plan_type in candidates],
+                    "source_type": "codex" if codex_model else "web",
+                })
+                for plan_type in candidates:
+                    try:
+                        token = account_service.get_available_access_token(
+                            plan_type=plan_type,
+                            source_type="codex" if codex_model else "web",
+                            plan_types={"Plus", "Team", "Pro"} if codex_model and not plan_type else None,
+                            excluded_tokens=attempted_image_tokens,
+                        )
+                        selected_plan_type = plan_type
+                        break
+                    except RuntimeError as exc:
+                        plan_error = str(exc)
+                        logger.info({
+                            "event": "image_account_select_plan_unavailable",
+                            "model": request.model,
+                            "requested_resolution": request.resolution or "",
+                            "plan_type": plan_type or "auto",
+                            "error": plan_error,
+                        })
+                        token = ""
+                        continue
+                if not token:
+                    raise RuntimeError(plan_error or "no available image quota")
+                attempted_image_tokens.add(token)
+                selected_account = account_service.get_account(token) or {}
+                logger.info({
+                    "event": "image_account_selected",
+                    "model": request.model,
+                    "requested_resolution": request.resolution or "",
+                    "requested_size": request.size or "",
+                    "selected_plan_type": selected_plan_type or "auto",
+                    "account_type": selected_account.get("type") or "",
+                    "account_status": selected_account.get("status") or "",
+                    "account_source_type": selected_account.get("source_type") or "web",
+                    "account_quota": selected_account.get("quota"),
+                    "account_image_quota_unknown": bool(selected_account.get("image_quota_unknown")),
+                    "token": anonymize_token(token),
+                })
             except RuntimeError as exc:
                 if emitted:
                     return
@@ -637,16 +1094,33 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     return
                 account_service.mark_image_result(token, True)
                 break
-            except ImageGenerationError:
-                account_service.mark_image_result(token, False)
+            except ImageGenerationError as exc:
+                mark_image_failure(token, exc)
                 raise
             except Exception as exc:
-                account_service.mark_image_result(token, False)
                 last_error = str(exc)
-                logger.warning({"event": "image_stream_fail", "request_token": token, "error": last_error})
+                logger.warning({"event": "image_stream_fail", "request_token": anonymize_token(token), "error": last_error})
                 if not emitted_for_token and is_token_invalid_error(last_error):
+                    account_service.mark_image_result(token, False)
                     account_service.remove_invalid_token(token, "image_stream")
                     continue
+                if is_rate_limit_error(exc):
+                    account_service.mark_image_rate_limited(
+                        token,
+                        error=last_error,
+                        headers=getattr(exc, "headers", None),
+                        body=getattr(exc, "body", None),
+                    )
+                    logger.warning({
+                        "event": "image_account_rate_limited",
+                        "model": request.model,
+                        "requested_resolution": request.resolution or "",
+                        "requested_size": request.size or "",
+                        "token": anonymize_token(token),
+                        "error": last_error,
+                    })
+                    continue
+                account_service.mark_image_result(token, False)
                 raise ImageGenerationError(image_stream_error_message(last_error)) from exc
 
     if not emitted:
@@ -663,6 +1137,8 @@ def stream_chat_events(
     *,
     preferred_token: str = "",
     excluded_tokens: set[str] | None = None,
+    plan_type: str | None = None,
+    plan_types: set[str] | tuple[str, ...] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """/api/chat/stream 专用通道：history_and_training_disabled=False，
     暴露 conversation_id 供调用方做异步 DELETE。失效 token 单次轮换。
@@ -673,10 +1149,17 @@ def stream_chat_events(
     token = ""
     if preferred_token and preferred_token not in attempted:
         account = account_service.get_account(preferred_token)
-        if account and str(account.get("status") or "") not in {"禁用", "异常"}:
+        if (
+                account
+                and str(account.get("status") or "") not in {"禁用", "异常"}
+                and account_service._account_matches_plan_type(account, plan_type)
+                and account_service._account_matches_any_plan_type(account, plan_types)
+        ):
             token = preferred_token
     if not token:
-        token = account_service.get_text_access_token(attempted)
+        token = account_service.get_text_access_token(attempted, plan_type=plan_type, plan_types=plan_types)
+    if plan_type and not token:
+        raise RuntimeError(f"no available {plan_type} text account")
     emitted = False
     while True:
         if token and token in attempted:
@@ -704,7 +1187,9 @@ def stream_chat_events(
             error_message = str(exc)
             if token and not emitted and is_token_invalid_error(error_message):
                 account_service.remove_invalid_token(token, "chat_stream")
-                token = account_service.get_text_access_token(attempted)
+                token = account_service.get_text_access_token(attempted, plan_type=plan_type, plan_types=plan_types)
+                if plan_type and not token:
+                    raise RuntimeError(f"no available {plan_type} text account")
                 if token:
                     continue
             raise

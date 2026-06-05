@@ -12,6 +12,7 @@ from services.config import config
 from services.storage.base import StorageBackend
 
 AuthRole = Literal["admin", "user"]
+AccountTier = Literal["free", "premium"]
 QuotaKind = Literal[
     "image_daily",
     "image_monthly",
@@ -88,6 +89,21 @@ class AuthService:
             return default
         return bool(value)
 
+    @classmethod
+    def _normalize_account_tier(cls, value: object, *, role: object = "user") -> AccountTier:
+        if str(role or "").strip().lower() == "admin":
+            return "premium"
+        raw = cls._clean(value).lower().replace("-", "_").replace(" ", "_")
+        compact = raw.replace("_", "")
+        if compact in {"premium", "advanced", "paid", "plus", "pro", "team", "enterprise", "vip", "high"}:
+            return "premium"
+        return "free"
+
+    @classmethod
+    def _can_use_paid_image_accounts(cls, item: dict[str, object]) -> bool:
+        role = cls._clean(item.get("role")).lower()
+        return role == "admin" or cls._normalize_account_tier(item.get("account_tier"), role=role) == "premium"
+
     def _normalize_item(self, raw: object) -> dict[str, object] | None:
         if not isinstance(raw, dict):
             return None
@@ -104,6 +120,10 @@ class AuthService:
         # 仅 user 角色保留明文，给 admin 后台"查看 / 复制密钥"用；admin 角色靠 config.auth_key 鉴权，
         # 不应再额外落明文，统一过滤掉。
         key_plain = self._clean(raw.get("key")) if role == "user" else ""
+        account_tier = self._normalize_account_tier(
+            raw.get("account_tier", raw.get("image_account_tier")),
+            role=role,
+        )
 
         # 画图三档迁移规则：
         #   - 已经有 image_total_quota 字段：当前格式，原样读取。
@@ -176,6 +196,7 @@ class AuthService:
             "role": role,
             "key_hash": key_hash,
             "key": key_plain,
+            "account_tier": account_tier,
             "enabled": bool(raw.get("enabled", True)),
             "created_at": created_at,
             "last_used_at": last_used_at,
@@ -248,6 +269,9 @@ class AuthService:
             "enabled": bool(item.get("enabled", True)),
             "created_at": item.get("created_at"),
             "last_used_at": item.get("last_used_at"),
+            "account_tier": cls._normalize_account_tier(item.get("account_tier"), role=item.get("role")),
+            "can_use_paid_image_accounts": cls._can_use_paid_image_accounts(item),
+            "can_use_high_resolution": cls._can_use_paid_image_accounts(item),
             # 仅暴露"是否可被 admin 回显"，原文要走专门的 get_raw_key 单独取。
             "key_visible": bool(item.get("role") == "user" and cls._clean(item.get("key"))),
         }
@@ -334,6 +358,36 @@ class AuthService:
             raise ValueError("这个名称已经在使用中了，换一个更容易区分的名称吧")
         return candidate
 
+    @classmethod
+    def _validate_quota_hierarchy(cls, item: dict[str, object]) -> None:
+        """同一业务内，短周期限额不能大于长周期限额。
+
+        unlimited 表示该档不参与上限约束；例如总额度不限时，月额度可以任意设置。
+        但如果月和总都有限，月额度大于总额度没有意义，也会让前端/用户理解混乱。
+        """
+
+        def check(
+            smaller_kind: QuotaKind,
+            larger_kind: QuotaKind,
+            smaller_label: str,
+            larger_label: str,
+        ) -> None:
+            if bool(item.get(f"{smaller_kind}_unlimited", False)):
+                return
+            if bool(item.get(f"{larger_kind}_unlimited", False)):
+                return
+            smaller_quota = cls._coerce_int(item.get(f"{smaller_kind}_quota"), 0)
+            larger_quota = cls._coerce_int(item.get(f"{larger_kind}_quota"), 0)
+            if smaller_quota > larger_quota:
+                raise ValueError(f"{smaller_label}不能大于{larger_label}")
+
+        check("image_daily", "image_monthly", "画图日限额", "画图月限额")
+        check("image_daily", "image_total", "画图日限额", "画图总额度")
+        check("image_monthly", "image_total", "画图月限额", "画图总额度")
+        check("chat_daily", "chat_monthly", "对话日限额", "对话月限额")
+        check("chat_daily", "chat_total", "对话日限额", "对话总额度")
+        check("chat_monthly", "chat_total", "对话月限额", "对话总额度")
+
     def create_key(
         self,
         *,
@@ -352,6 +406,7 @@ class AuthService:
         chat_monthly_unlimited: bool = True,
         chat_total_quota: int = 0,
         chat_total_unlimited: bool = True,
+        account_tier: AccountTier | str = "free",
     ) -> tuple[dict[str, object], str]:
         with self._lock:
             self._reload_locked()
@@ -377,6 +432,7 @@ class AuthService:
                 "key_hash": key_hash,
                 # admin 不落明文：admin 鉴权走 config.auth_key，不通过 auth_keys.json。
                 "key": "" if is_admin else raw_key,
+                "account_tier": self._normalize_account_tier(account_tier, role=role),
                 "enabled": True,
                 "created_at": _now_iso(),
                 "last_used_at": None,
@@ -403,6 +459,8 @@ class AuthService:
                 "chat_total_used": 0,
                 "chat_total_unlimited": True if is_admin else bool(chat_total_unlimited),
             }
+            if not is_admin:
+                self._validate_quota_hierarchy(item)
             self._items.append(item)
             self._save()
             return self._public_item(item), raw_key
@@ -439,13 +497,22 @@ class AuthService:
                     next_item["key_hash"] = self._build_key_hash_locked(raw_candidate, exclude_id=normalized_id)
                     next_item["key"] = "" if next_role == "admin" else raw_candidate
                 if next_role == "user":
+                    if "account_tier" in updates and updates.get("account_tier") is not None:
+                        next_item["account_tier"] = self._normalize_account_tier(
+                            updates.get("account_tier"),
+                            role=next_role,
+                        )
+                    should_validate_quota = self._has_quota_config_updates(updates)
                     self._apply_quota_updates_locked(next_item, updates)
+                    if should_validate_quota:
+                        self._validate_quota_hierarchy(next_item)
                 else:
                     # admin 强制全档不限额，相关计数永远清零，挡掉外部恶意写入。
                     for kind in (*_IMAGE_KINDS, *_CHAT_KINDS):
                         next_item[f"{kind}_quota"] = 0
                         next_item[f"{kind}_used"] = 0
                         next_item[f"{kind}_unlimited"] = True
+                    next_item["account_tier"] = "premium"
                 self._items[index] = next_item
                 self._save()
                 return self._public_item(next_item)
@@ -474,6 +541,13 @@ class AuthService:
         if updates.get("reset_used"):
             # 老前端协议；映射到画图总额度计数。
             target["image_total_used"] = 0
+
+    @staticmethod
+    def _has_quota_config_updates(updates: dict[str, object]) -> bool:
+        for kind in (*_IMAGE_KINDS, *_CHAT_KINDS):
+            if f"{kind}_quota" in updates or f"{kind}_unlimited" in updates:
+                return True
+        return False
 
     def get_by_id(self, key_id: str) -> dict[str, object] | None:
         normalized_id = self._clean(key_id)

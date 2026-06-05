@@ -382,6 +382,29 @@
   opacity: 0.85;
 }
 
+@keyframes image-composer-breathe {
+  0%, 100% {
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.04),
+      0 4px 24px rgba(15, 23, 42, 0.08),
+      0 0 0 1px rgba(15, 23, 42, 0.045),
+      0 0 0 0 rgba(15, 23, 42, 0.10);
+  }
+  50% {
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.04),
+      0 12px 34px -18px rgba(15, 23, 42, 0.30),
+      0 0 0 1px rgba(15, 23, 42, 0.12),
+      0 0 34px rgba(15, 23, 42, 0.12);
+  }
+}
+
+.image-composer-running {
+  position: relative;
+  animation: image-composer-breathe 2.7s ease-in-out infinite;
+  will-change: box-shadow;
+}
+
 @layer utilities {
   .aurora-drift-a {
     animation: aurora-drift-a 18s ease-in-out infinite;
@@ -410,6 +433,9 @@
   }
   .dot-grid-loader::before,
   .dot-grid-loader::after {
+    animation: none;
+  }
+  .image-composer-running {
     animation: none;
   }
 }
@@ -482,6 +508,24 @@
 }
 .chat-md blockquote p::before,
 .chat-md blockquote p::after { content: none; }
+
+.chat-stream-caret {
+  display: inline-block;
+  width: 0.42em;
+  height: 1em;
+  margin-left: 0.12em;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.34;
+  vertical-align: -0.12em;
+  animation: chat-caret-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes chat-caret-pulse {
+  0%,
+  100% { opacity: 0.22; }
+  45% { opacity: 0.5; }
+}
 
 /* highlight.js github-dark 子集：只覆盖最常见 token，体积比整包小。
    .hljs 容器自身用 prose 的 pre-bg/pre-code 即可，不再单独着色。 */

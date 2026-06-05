@@ -7,9 +7,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import api.image_tasks as image_tasks_module
+from services.config import config
 
 
-AUTH_HEADERS = {"Authorization": "Bearer chatgpt2api"}
+AUTH_HEADERS = {"Authorization": f"Bearer {config.auth_key}"}
 
 
 class FakeImageTaskService:
@@ -70,7 +71,7 @@ class ImageTasksApiTests(unittest.TestCase):
         response = self.client.post(
             "/api/image-tasks/generations",
             headers=AUTH_HEADERS,
-            json={"client_task_id": "task-1", "prompt": "cat", "model": "gpt-image-2"},
+            json={"client_task_id": "task-1", "prompt": "cat", "model": "gpt-image-2", "resolution": "4k"},
         )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -78,12 +79,34 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(payload["id"], "task-1")
         self.assertEqual(payload["status"], "success")
         self.assertEqual(len(self.fake_service.generation_calls), 1)
+        self.assertEqual(self.fake_service.generation_calls[0][1]["resolution"], "4k")
+
+    def test_free_user_cannot_create_high_resolution_task(self):
+        with mock.patch.object(
+            image_tasks_module,
+            "require_identity",
+            return_value={
+                "id": "user-1",
+                "role": "user",
+                "name": "Free User",
+                "account_tier": "free",
+                "can_use_high_resolution": False,
+            },
+        ):
+            response = self.client.post(
+                "/api/image-tasks/generations",
+                headers={"Authorization": "Bearer sk-free-user"},
+                json={"client_task_id": "task-1", "prompt": "cat", "model": "gpt-image-2", "resolution": "4k"},
+            )
+
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(len(self.fake_service.generation_calls), 0)
 
     def test_create_edit_task_accepts_multiple_images(self):
         response = self.client.post(
             "/api/image-tasks/edits",
             headers=AUTH_HEADERS,
-            data={"client_task_id": "edit-1", "prompt": "edit", "model": "gpt-image-2"},
+            data={"client_task_id": "edit-1", "prompt": "edit", "model": "gpt-image-2", "resolution": "2k"},
             files=[
                 ("image", ("one.png", b"one", "image/png")),
                 ("image", ("two.png", b"two", "image/png")),
@@ -93,6 +116,7 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["id"], "edit-1")
         self.assertEqual(len(self.fake_service.edit_calls), 1)
+        self.assertEqual(self.fake_service.edit_calls[0][1]["resolution"], "2k")
         images = self.fake_service.edit_calls[0][1]["images"]
         self.assertEqual(len(images), 2)
 

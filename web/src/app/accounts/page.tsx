@@ -175,11 +175,20 @@ function displayAccountType(account: Account) {
   return account.type || "Free";
 }
 
+function displayAccountSource(account: Account) {
+  return String(account.source_type || "web").toLowerCase() === "codex" ? "Codex" : "Web";
+}
+
 const TYPE_BADGE_CLASS: Record<string, string> = {
   Free: "border-stone-200 bg-stone-50 text-stone-700",
   Plus: "border-blue-200 bg-blue-50 text-blue-700",
   pro: "border-violet-200 bg-violet-50 text-violet-700",
   prolite: "border-emerald-200 bg-emerald-50 text-emerald-700",
+};
+
+const SOURCE_BADGE_CLASS: Record<"Web" | "Codex", string> = {
+  Web: "border-stone-200 bg-stone-50 text-stone-600",
+  Codex: "border-cyan-200 bg-cyan-50 text-cyan-700",
 };
 
 const STATUS_BADGE_CLASS: Record<AccountStatus, string> = {
@@ -273,6 +282,7 @@ function AccountCard({
   isUpdating: boolean;
 }) {
   const typeName = displayAccountType(account);
+  const sourceName = displayAccountSource(account);
   const typeAvatar = (typeName[0] || "?").toUpperCase();
   const isUnlimited = isUnlimitedImageQuotaAccount(account);
   const isUnknown = imageQuotaUnknown(account);
@@ -305,6 +315,12 @@ function AccountCard({
             className={cn("rounded-md font-medium", TYPE_BADGE_CLASS[typeName] ?? TYPE_BADGE_CLASS.Free)}
           >
             {typeName}
+          </Badge>
+          <Badge
+            variant="outline"
+            className={cn("rounded-md font-medium", SOURCE_BADGE_CLASS[sourceName])}
+          >
+            {sourceName}
           </Badge>
           <Badge
             variant="outline"
@@ -948,7 +964,7 @@ function AccountsPageContent() {
                       />
                     </th>
                     <th className="w-56 px-4 py-2.5 font-medium">Token</th>
-                    <th className="w-28 px-4 py-2.5 font-medium">类型</th>
+                    <th className="w-36 px-4 py-2.5 font-medium">类型</th>
                     <th className="w-24 px-4 py-2.5 font-medium">状态</th>
                     <th className="w-56 px-4 py-2.5 font-medium">账号信息</th>
                     <th className="w-24 px-4 py-2.5 font-medium">额度</th>
@@ -999,9 +1015,17 @@ function AccountsPageContent() {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant="secondary" className="rounded-md bg-secondary font-data text-[11px] font-medium text-foreground/80">
-                            {displayAccountType(account)}
-                          </Badge>
+                          <div className="flex flex-wrap gap-1.5">
+                            <Badge variant="secondary" className="rounded-md bg-secondary font-data text-[11px] font-medium text-foreground/80">
+                              {displayAccountType(account)}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={cn("rounded-md font-data text-[11px] font-medium", SOURCE_BADGE_CLASS[displayAccountSource(account)])}
+                            >
+                              {displayAccountSource(account)}
+                            </Badge>
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <span className="inline-flex items-center gap-2">

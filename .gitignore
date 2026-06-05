@@ -17,6 +17,8 @@ docker-compose-local.yml
 
 .claude/settings.local.json
 CLAUDE.md
+AGENTS.md
+*.patch
 
 # Environment variables
 .env

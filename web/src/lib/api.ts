@@ -6,10 +6,13 @@ export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-2" | "codex-gpt-image-2";
 export type AuthRole = "admin" | "user";
+export type AccountTier = "free" | "premium";
 
 export type Account = {
   access_token: string;
   type: AccountType;
+  source_type?: "web" | "codex" | string;
+  export_type?: string;
   status: AccountStatus;
   quota: number;
   initial_quota?: number;
@@ -31,6 +34,11 @@ export type Account = {
   refresh_token?: string | null;
   id_token?: string | null;
   created_at?: string | null;
+};
+
+export type AccountImportRecord = Record<string, unknown> & {
+  access_token?: string;
+  accessToken?: string;
 };
 
 type AccountListResponse = {
@@ -197,6 +205,7 @@ export type ImageTask = {
   mode: "generate" | "edit";
   model?: ImageModel;
   size?: string;
+  resolution?: string;
   created_at: string;
   updated_at: string;
   data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
@@ -220,6 +229,9 @@ export type LoginResponse = {
   role: AuthRole;
   subject_id: string;
   name: string;
+  account_tier?: AccountTier;
+  can_use_paid_image_accounts?: boolean;
+  can_use_high_resolution?: boolean;
 };
 
 export type UserKey = {
@@ -229,6 +241,9 @@ export type UserKey = {
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
+  account_tier: AccountTier;
+  can_use_paid_image_accounts?: boolean;
+  can_use_high_resolution?: boolean;
   // 后端是否仍持有原文密钥；老数据只存 key_hash 时为 false，前端据此切到"重置后回显"流程。
   key_visible: boolean;
   image_daily_quota: number;
@@ -261,6 +276,9 @@ export type AuthIdentity = {
   id: string;
   name: string;
   role: AuthRole;
+  account_tier?: AccountTier;
+  can_use_paid_image_accounts?: boolean;
+  can_use_high_resolution?: boolean;
   image_daily_quota: number;
   image_daily_used: number;
   image_daily_unlimited: boolean;
@@ -343,10 +361,10 @@ export async function fetchAccounts() {
   return httpRequest<AccountListResponse>("/api/accounts");
 }
 
-export async function createAccounts(tokens: string[]) {
+export async function createAccounts(tokens: string[], sourceType = "web", accountRecords: AccountImportRecord[] = []) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "POST",
-    body: { tokens },
+    body: { tokens, source_type: sourceType, account_records: accountRecords },
   });
 }
 
@@ -385,7 +403,7 @@ export async function updateAccount(
   });
 }
 
-export async function generateImage(prompt: string, model?: ImageModel, size?: string) {
+export async function generateImage(prompt: string, model?: ImageModel, size?: string, resolution?: string) {
   return httpRequest<ImageResponse>(
     "/v1/images/generations",
     {
@@ -394,6 +412,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
         prompt,
         ...(model ? { model } : {}),
         ...(size ? { size } : {}),
+        ...(resolution ? { resolution } : {}),
         n: 1,
         response_format: "b64_json",
       },
@@ -401,7 +420,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string) {
+export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string, resolution?: string) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -415,6 +434,9 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   if (size) {
     formData.append("size", size);
   }
+  if (resolution) {
+    formData.append("resolution", resolution);
+  }
   formData.append("n", "1");
 
   return httpRequest<ImageResponse>(
@@ -426,7 +448,13 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   );
 }
 
-export async function createImageGenerationTask(clientTaskId: string, prompt: string, model?: ImageModel, size?: string) {
+export async function createImageGenerationTask(
+  clientTaskId: string,
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+  resolution?: string,
+) {
   return httpRequest<ImageTask>("/api/image-tasks/generations", {
     method: "POST",
     body: {
@@ -434,6 +462,7 @@ export async function createImageGenerationTask(clientTaskId: string, prompt: st
       prompt,
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
+      ...(resolution ? { resolution } : {}),
     },
   });
 }
@@ -444,6 +473,7 @@ export async function createImageEditTask(
   prompt: string,
   model?: ImageModel,
   size?: string,
+  resolution?: string,
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -458,6 +488,9 @@ export async function createImageEditTask(
   }
   if (size) {
     formData.append("size", size);
+  }
+  if (resolution) {
+    formData.append("resolution", resolution);
   }
 
   return httpRequest<ImageTask>("/api/image-tasks/edits", {
@@ -631,6 +664,7 @@ export async function fetchMyIdentity() {
 export type UserKeyCreatePayload = {
   name?: string;
   key?: string;
+  account_tier?: AccountTier;
   image_daily_quota?: number;
   image_daily_unlimited?: boolean;
   image_monthly_quota?: number;
@@ -649,6 +683,7 @@ export type UserKeyUpdatePayload = {
   enabled?: boolean;
   name?: string;
   key?: string;
+  account_tier?: AccountTier;
   image_daily_quota?: number;
   image_daily_unlimited?: boolean;
   image_monthly_quota?: number;
@@ -675,6 +710,7 @@ export async function createUserKey(payload: UserKeyCreatePayload) {
     body: {
       name: payload.name ?? "",
       ...(payload.key ? { key: payload.key } : {}),
+      account_tier: payload.account_tier ?? "free",
       image_daily_quota: Math.max(0, Number(payload.image_daily_quota ?? 0) || 0),
       image_daily_unlimited: payload.image_daily_unlimited ?? true,
       image_monthly_quota: Math.max(0, Number(payload.image_monthly_quota ?? 0) || 0),
@@ -1045,6 +1081,7 @@ export async function unhideGalleryItem(id: string) {
 
 export type ChatStreamMessage = { role: "user" | "assistant" | "system"; content: string };
 export type ChatPersistedMessage = ChatStreamMessage;
+export type ChatAccountType = string;
 
 export type ChatStreamEvent =
   | { type: "conversation.id"; conversation_id: string }
@@ -1063,6 +1100,10 @@ export type ChatConversation = {
 
 export async function listChatConversations() {
   return httpRequest<{ items: ChatConversation[] }>("/api/chat/conversations");
+}
+
+export async function fetchChatAccountTypes() {
+  return httpRequest<{ items: ChatAccountType[] }>("/api/chat/account-types");
 }
 
 export async function saveChatConversation(payload: {
@@ -1095,7 +1136,13 @@ export async function deleteChatConversation(conversationId: string) {
  * abortSignal 透传：用户按"停止生成"时上层 controller.abort() 即可。
  */
 export async function* streamChat(
-  body: { model: string; messages: ChatStreamMessage[]; conversation_id?: string; force_switch_account?: boolean },
+  body: {
+    model: string;
+    messages: ChatStreamMessage[];
+    conversation_id?: string;
+    force_switch_account?: boolean;
+    account_type?: ChatAccountType;
+  },
   abortSignal?: AbortSignal,
 ): AsyncGenerator<ChatStreamEvent, void, void> {
   const authKey = await getStoredAuthKey();

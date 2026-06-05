@@ -193,8 +193,16 @@ Content-Type: application/json
 | `model` | string |   | 默认 `gpt-image-2` |
 | `n` | int |   | 1-4，默认 1。**会按 n 整体预扣额度**，详见下方"额度与失败退额度"|
 | `size` | string |   | 支持 `1:1` `16:9` `9:16` `4:3` `3:4`，其它字符串会原样注入 prompt |
+| `resolution` | string |   | 支持 `1k` `2k` `4k`。`2k` / `4k` 需要高级用户密钥，后端会强制校验 |
 | `response_format` | string |   | `url` 或 `b64_json`，默认 `b64_json`。**安卓端强烈建议 `url`**（解 b64 慢且耗内存） |
 | `stream` | bool |   | 见下文流式说明 |
+
+**清晰度与账号池调度**：
+
+- `resolution` 为空或 `1k`：普通画图路线，按用户权限选择对应账号池。
+- `resolution=2k/4k`：后端优先走 Codex 高清画图路线，并按 `Pro` → `Plus` → `Team` 从账号池挑选可用账号。
+- `4k + size=9:16` 会映射到 `2160x3840`；`4k + size=16:9` 会映射到 `3840x2160`；其它画幅按同等长边规则映射。
+- 高清路线如果上游失败，后端会返回错误，不会静默降级成 1K；AP 端应该把错误提示给用户。
 
 **非流式响应（200）**：
 
@@ -248,6 +256,7 @@ Content-Type: multipart/form-data
 | `model` | string |   | 默认 `gpt-image-2` |
 | `n` | int |   | 1-4 |
 | `size` | string |   | 同上 |
+| `resolution` | string |   | 同上，multipart 表单字段名就是 `resolution` |
 | `response_format` | string |   | 同上 |
 | `stream` | string |   | `true`/`false` |
 
@@ -267,6 +276,7 @@ interface DrawApi {
         @Part("model") model: RequestBody,
         @Part("n") n: RequestBody,
         @Part("size") size: RequestBody?,
+        @Part("resolution") resolution: RequestBody?,
         @Part("response_format") responseFormat: RequestBody,
     ): ImageGenerationResponse
 }
@@ -393,20 +403,42 @@ Cache-Control: no-store
     "id": "abc123",
     "name": "用户A",
     "role": "user",
-    "quota": 100,
-    "used": 23,
-    "remaining": 77,
-    "unlimited": false
+    "account_tier": "premium",
+    "can_use_paid_image_accounts": true,
+    "can_use_high_resolution": true,
+    "image_daily_quota": 20,
+    "image_daily_used": 3,
+    "image_daily_unlimited": false,
+    "image_daily_remaining": 17,
+    "image_monthly_quota": 200,
+    "image_monthly_used": 31,
+    "image_monthly_unlimited": false,
+    "image_monthly_remaining": 169,
+    "image_total_quota": 1000,
+    "image_total_used": 122,
+    "image_total_unlimited": false,
+    "image_total_remaining": 878
   }
 }
 ```
 
-`role` = `admin` 或 token 是 admin 的 auth_key 时，返回的 `unlimited: true`、`remaining: null`，AP 端按"无限额度"展示。
+`role` = `admin` 或 token 是 admin 的 auth_key 时，六档额度都会返回 `*_unlimited: true`、`*_remaining: null`，AP 端按"无限额度"展示。
+
+**用户等级**：
+
+| 字段 | 含义 |
+|---|---|
+| `account_tier=free` | 普通用户。只能使用 free 账号池，AP 端应禁用 2K / 4K |
+| `account_tier=premium` | 高级用户。可使用 Plus / Team / Pro 账号池和 2K / 4K |
+| `can_use_high_resolution=true` | 直接作为 AP 端是否允许点 2K / 4K 的判断字段 |
+
+> UI 禁用只是体验。后端也会在 `/v1/images/*` 入口强制校验：普通用户即使用抓包或 F12 改出 `resolution=4k`，也会返回 403。
 
 **调用时机**：
 
 - AP 启动后调一次，存到 ViewModel
 - 每次画图成功后再调一次刷新
+- 每次画图失败后也建议静默刷新一次，因为后端可能已经扣费后又退回，或者账号池限流状态发生变化
 
 ---
 
@@ -619,7 +651,7 @@ Authorization: Bearer <token>
 | 400 | 参数错误（prompt 为空、size 不合法、image 缺失、image_rel 不存在等） | 不扣不退 | 提示具体 `error` 字段，不重试 |
 | 401 | 密钥无效 | n/a | 清密钥跳登录页（生图链路除外，见鉴权钩子说明） |
 | 402 | **额度不足** | n/a | 弹窗提示"额度不足，请联系管理员"，不要自动重试 |
-| 403 | 权限不足（发布别人的图、user key 调 admin 接口等） | n/a | 提示具体 `error`，不重试 |
+| 403 | 权限不足（发布别人的图、user key 调 admin 接口、普通用户请求 2K / 4K 等） | n/a | 提示具体 `error`，不重试 |
 | 404 | 画廊条目不存在 / 已下架 | n/a | 把对应卡片从列表中移除 |
 | 429 | 号池没有可用配额（所有上游账户都被限流） | 已退还 | 提示"服务繁忙，稍后重试"，可定时重试 |
 | 502 | 上游 ChatGPT Web 异常或网络错误 | 已退还 | 自动重试 1 次，仍失败弹错 |
@@ -710,6 +742,9 @@ app/
 | P0 | `/v1/images/*` 接受 `response_format=url` | ✅ 已实现，AP 端显式传 `url` 即可拿到完整 http(s) URL |
 | P1 | `/api/auth/me` 已加 `Cache-Control: no-store` | ✅ 已实现 |
 | P1 | 上游真失败 / 取消任务自动退还预扣额度 | ✅ v1.2.2 实现，AP 端不需要手动退 |
+| P1 | 用户密钥普通 / 高级等级 | ✅ 已实现。普通用户限制 free 账号池和 1K，高级用户可用 Plus / Team / Pro 与 2K / 4K |
+| P1 | `/v1/images/*` 接受 `resolution=1k/2k/4k` | ✅ 已实现。2K / 4K 会走 Codex 高清路线，并保持后端强制权限校验 |
+| P1 | 图片 429 限流账号自动标记与恢复 | ✅ 已实现。命中 429 / `rate_limit_exceeded` / `usage_limit_reached` 时跳过当前账号并按 reset header 恢复 |
 | P1 | 画廊已发布 / 用户作品不被自动清理 | ✅ v1.2.2 实现，两个保护开关默认开启 |
 | P1 | `/api/gallery/published/batch` 批量查询 | ✅ v1.2.2 实现，避免逐张 N+1 请求 |
 | P2 | 流式事件加上 `error` 单独事件类型 | 暂未实现，目前用 `image.generation.message` 复用 |
@@ -737,7 +772,13 @@ curl -H "Authorization: Bearer YOUR_KEY" http://127.0.0.1:8000/v1/models
 curl -X POST http://127.0.0.1:8000/v1/images/generations \
   -H "Authorization: Bearer YOUR_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"a cat","n":1,"response_format":"url"}'
+  -d '{"prompt":"a cat","n":1,"size":"9:16","resolution":"1k","response_format":"url"}'
+
+# 4K 竖图。需要高级用户密钥，后端会选 Pro / Plus / Team Codex 账号池
+curl -X POST http://127.0.0.1:8000/v1/images/generations \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"一张极简高级的产品海报","n":1,"size":"9:16","resolution":"4k","response_format":"url"}'
 
 # 文生图（流式）
 curl -N -X POST http://127.0.0.1:8000/v1/images/generations \

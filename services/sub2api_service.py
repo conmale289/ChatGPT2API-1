@@ -387,8 +387,27 @@ def list_remote_groups(server: dict) -> list[dict]:
     return items
 
 
-def _fetch_access_token_for_account(server: dict, account_id: str) -> tuple[str, dict]:
-    """Return (access_token, account_meta) for a single sub2api account id."""
+def _account_payload_from_remote(account: dict, account_id: str) -> dict:
+    credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
+    access_token = _extract_access_token(credentials)
+    if not access_token:
+        raise RuntimeError("missing access_token")
+    payload = dict(credentials)
+    payload["access_token"] = access_token
+    payload["sub2api_account_id"] = str(account.get("id") if account.get("id") is not None else account_id)
+    payload["email"] = _clean(payload.get("email")) or _clean(account.get("name"))
+    payload["plan_type"] = _clean(payload.get("plan_type"))
+    if _clean(account.get("platform")):
+        payload["platform"] = _clean(account.get("platform"))
+    if _clean(account.get("type")):
+        payload["remote_account_type"] = _clean(account.get("type"))
+    if _clean(payload.get("refresh_token")):
+        payload["source_type"] = "codex"
+    return payload
+
+
+def _fetch_account_payload_for_account(server: dict, account_id: str) -> dict:
+    """Return a full local account payload for a single sub2api account id."""
     base_url = _clean(server.get("base_url"))
     headers = _auth_headers(server)
 
@@ -408,14 +427,7 @@ def _fetch_access_token_for_account(server: dict, account_id: str) -> tuple[str,
     account = _unwrap_envelope(payload)
     if not isinstance(account, dict):
         account = payload if isinstance(payload, dict) else {}
-    credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
-    access_token = _extract_access_token(credentials)
-    if not access_token:
-        raise RuntimeError("missing access_token")
-    return access_token, {
-        "email": _clean(credentials.get("email")),
-        "plan_type": _clean(credentials.get("plan_type")),
-    }
+    return _account_payload_from_remote(account, account_id)
 
 
 class Sub2APIImportService:
@@ -472,18 +484,17 @@ class Sub2APIImportService:
     def _run_import(self, server_id: str, server: dict, account_ids: list[str]) -> None:
         self._update_job(server_id, status="running")
 
-        tokens: list[str] = []
+        account_records: list[dict] = []
         max_workers = min(8, max(1, len(account_ids)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
-                executor.submit(_fetch_access_token_for_account, server, account_id): account_id
+                executor.submit(_fetch_account_payload_for_account, server, account_id): account_id
                 for account_id in account_ids
             }
             for future in as_completed(future_map):
                 account_id = future_map[future]
                 try:
-                    token, _meta = future.result()
-                    tokens.append(token)
+                    account_records.append(future.result())
                 except Exception as exc:
                     self._append_error(server_id, account_id, str(exc) or "unknown error")
 
@@ -495,7 +506,7 @@ class Sub2APIImportService:
                     failed=failed,
                 )
 
-        if not tokens:
+        if not account_records:
             current = self._config.get_import_job(server_id) or {}
             self._update_job(
                 server_id,
@@ -505,7 +516,8 @@ class Sub2APIImportService:
             )
             return
 
-        add_result = account_service.add_accounts(tokens)
+        tokens = [str(item.get("access_token") or "").strip() for item in account_records if str(item.get("access_token") or "").strip()]
+        add_result = account_service.add_account_items(account_records)
         refresh_result = account_service.refresh_accounts(tokens)
         current = self._config.get_import_job(server_id) or {}
         self._update_job(
