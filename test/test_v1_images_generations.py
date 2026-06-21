@@ -14,13 +14,13 @@ BASE_URL = "http://localhost:8000"
 
 class ImageGenerationsTests(unittest.TestCase):
     def test_image_generation_http(self):
-        """测试图片生成的非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for image generation."""
         response = requests.post(
             f"{BASE_URL}/v1/images/generations",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
             json={
                 "model": "gpt-image-2",
-                "prompt": "我想做一张南京城市宣传海报图。",
+                "prompt": "I want to make a promotional poster for Nanjing city.",
                 "n": 1,
                 "response_format": "b64_json",
             },
@@ -41,13 +41,13 @@ class ImageGenerationsTests(unittest.TestCase):
             print(path)
 
     def test_image_generation_stream_http(self):
-        """测试图片生成的流式 HTTP 调用。"""
+        """Test streaming HTTP call for image generation."""
         response = requests.post(
             f"{BASE_URL}/v1/images/generations",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
             json={
                 "model": "gpt-image-2",
-                "prompt": "我想做一张南京城市宣传海报图。",
+                "prompt": "I want to make a promotional poster for Nanjing city.",
                 "n": 1,
                 "response_format": "b64_json",
                 "stream": True,

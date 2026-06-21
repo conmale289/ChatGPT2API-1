@@ -29,11 +29,11 @@ export type ImageLightboxItem = {
 };
 
 /**
- * 单张图片在画廊里的发布态。
- *  - idle：未发布（默认）
- *  - publishing：正在发请求
- *  - published：已发布
- *  - unsupported：本地 b64 图，没有 image_rel，无法发画廊（按钮置灰）
+ * Publish state of a single image in the gallery.
+ *  - idle: not published (default)
+ *  - publishing: request in progress
+ *  - published: already published
+ *  - unsupported: local b64 image without image_rel, cannot publish to gallery (button disabled)
  */
 export type ImagePublishState = "idle" | "publishing" | "published" | "unsupported";
 
@@ -48,11 +48,12 @@ type ImageResultsProps = {
   onRetryImage: (conversationId: string, turnId: string, imageId: string) => void | Promise<void>;
   onReplyToTurn?: (conversationId: string, turnId: string, aiMessage: string) => void;
   /**
-   * 单图发布到画廊。turnId + image 一起传，让父组件能拿到 turn.prompt / model / size
-   * 拼成 publish 请求体。父组件用 publishState 反推每张图的状态显示。
+   * Publish a single image to gallery. Passes turnId + image together so parent component
+   * can access turn.prompt / model / size to build the publish request body.
+   * Parent uses publishState to determine the display state of each image.
    */
   onPublishImage?: (conversationId: string, turnId: string, image: StoredImage) => void | Promise<void>;
-  /** 用 image.id 索引发布态。父组件用 Map 维护。 */
+  /** Publish state indexed by image.id. Maintained as a Map by parent component. */
   publishStateOf?: (image: StoredImage) => ImagePublishState;
   formatConversationTime: (value: string) => string;
 };
@@ -64,12 +65,13 @@ function getStoredImageSrc(image: StoredImage) {
   return image.url || "";
 }
 
-// 单独识别"额度不足"这一类错误。这种错误不应该让用户去点"重试"或者"回复"——
-// 重试还是会被后端打回来，而模型也并没有真正反问什么，没东西可回复。
-// 所以走一张专门的卡片，只展示提示信息，引导用户联系管理员。
+// Specifically identifies "insufficient quota" errors. These should not let users click "retry" or "reply" —
+// retrying will just be rejected by the backend again, and the model didn't actually ask anything, so there's nothing to reply to.
+// Shows a dedicated card with guidance to contact the administrator.
 function isQuotaError(message: string | undefined | null) {
   if (!message) return false;
-  return message.includes("额度不足");
+  const lower = message.toLowerCase();
+  return lower.includes("quota") || lower.includes("used up");
 }
 
 async function downloadStoredImage(image: StoredImage, index: number) {
@@ -95,10 +97,10 @@ async function downloadStoredImage(image: StoredImage, index: number) {
   URL.revokeObjectURL(url);
 }
 
-// 错误卡片里的"模型反问/拒绝"原文直接全部展示，
-// 让卡片随内容长度自适应高度，避免悬浮提示带来的闪烁/对位问题。
-// 用 react-markdown 渲染，覆盖原生标签样式以贴合卡片小字体的语境，
-// 列表/代码/链接都做了紧凑处理避免撑破布局。
+// Error card displays the full "model question/refusal" text directly,
+// letting the card height adapt to content length, avoiding flickering/misalignment with tooltips.
+// Rendered with react-markdown, overriding native tag styles to fit the card's small font context.
+// Lists/code/links are compactly styled to avoid breaking the layout.
 function ErrorMessageBlock({ message }: { message: string }) {
   return (
     <div
@@ -205,23 +207,23 @@ export function ImageResults({
   if (!selectedConversation) {
     return (
       <div className="relative flex h-full items-center justify-center text-center">
-        {/* 装饰层用 fixed inset-0 + overflow-hidden 包一层，
-            把超出视口的光斑裁剪掉，避免撑出滚动条；
-            内层光斑改回 absolute，相对这个视口尺寸的容器定位。
-            z-0 让它在内容下方、navbar (z-40) 后方，导航栏 backdrop-blur 自然柔化透出。 */}
+        {/* Decoration layer wrapped in fixed inset-0 + overflow-hidden,
+            clipping spots that exceed the viewport to avoid scrollbars;
+            inner spots use absolute, positioned relative to this viewport-sized container.
+            z-0 keeps it below content, behind navbar (z-40), navbar backdrop-blur naturally softens what shows through. */}
         <div
           aria-hidden
           className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
           style={{
-            // 椭圆羽化：中心 18% 内全保留，往外一路平滑过渡到完全透明，
-            // 边缘没有任何"光层"的轮廓感。
+            // Ellipse feathering: fully preserved within center 18%, smoothly transitions outward to fully transparent,
+            // no visible "light layer" outline at the edges.
             maskImage:
               "radial-gradient(ellipse 60% 70% at 50% 50%, #000 18%, rgba(0,0,0,0.6) 55%, transparent 95%)",
             WebkitMaskImage:
               "radial-gradient(ellipse 60% 70% at 50% 50%, #000 18%, rgba(0,0,0,0.6) 55%, transparent 95%)",
           }}
         >
-          {/* Aurora 光斑：冷蓝 + 暖米，错位漂浮，softer + 更大半径，避免硬边 */}
+          {/* Aurora spots: cool blue + warm cream, offset floating, softer + larger radius, avoiding hard edges */}
           <div
             className="aurora-drift-a absolute top-[-10%] left-[-8%] size-[720px] blur-[130px]"
             style={{
@@ -236,7 +238,7 @@ export function ImageResults({
                 "radial-gradient(circle at 50% 50%, oklch(0.80 0.09 60 / 0.36), transparent 70%)",
             }}
           />
-          {/* 反角 accent，铺一层薄色，避免出现"对角空缺" */}
+          {/* Counter-corner accent, adding a thin layer to avoid "diagonal gaps" */}
           <div
             className="aurora-drift-b absolute top-[-6%] right-[8%] size-[520px] blur-[120px]"
             style={{
@@ -252,7 +254,7 @@ export function ImageResults({
             }}
           />
 
-          {/* 中心慢转 conic 极淡光晕，给画面"呼吸"但不形成边界 */}
+          {/* Center slow-rotating conic ultra-faint halo, gives the scene "breathing" without forming boundaries */}
           <div
             className="aurora-spin absolute top-1/2 left-1/2 size-[960px] -translate-x-1/2 -translate-y-1/2 opacity-50 blur-2xl"
             style={{
@@ -262,9 +264,9 @@ export function ImageResults({
           />
         </div>
 
-        {/* 文案内容 */}
+        {/* Copy content */}
         <div className="relative w-full max-w-4xl px-6">
-          {/* 标题上方 eyebrow */}
+          {/* Eyebrow above title */}
           <div className="mb-5 flex items-center justify-center gap-3 sm:mb-6">
             <span className="h-px w-10 bg-stone-300" />
             <span className="font-data text-[10px] font-semibold tracking-[0.32em] text-stone-500 uppercase">
@@ -287,10 +289,10 @@ export function ImageResults({
               fontFamily: '"Palatino Linotype","Book Antiqua","URW Palladio L","Times New Roman",serif',
             }}
           >
-            在同一窗口里保留本地历史与任务状态，并从已有结果图继续发起新的无状态编辑。
+            Retain local history and task state in the same window, and continue stateless editing from existing results.
           </p>
 
-          {/* 标题下方编号轴 */}
+          {/* Number axis below title */}
           <div className="mt-7 flex items-center justify-center gap-3 sm:mt-9">
             <span className="font-data text-[10px] font-semibold tracking-[0.28em] text-stone-400 tabular-nums">
               01
@@ -309,8 +311,8 @@ export function ImageResults({
     );
   }
 
-  // 整段对话里所有「成功生成」的图（按 turn 顺序）。
-  // 灯箱的左侧缩略图带就走这份列表，参考图（用户上传）不计入。
+  // All "successfully generated" images across the entire conversation (in turn order).
+  // The lightbox's left thumbnail strip uses this list; reference images (user uploads) are not included.
   const allSuccessfulImages: ImageLightboxItem[] = selectedConversation.turns.flatMap((turn) =>
     turn.images.flatMap((image) => {
       const src = image.status === "success" ? getStoredImageSrc(image) : "";
@@ -343,8 +345,8 @@ export function ImageResults({
               <div className="flex justify-end">
                 <div className="group max-w-[92%] sm:max-w-[78%]">
                   <div className="mb-1.5 flex flex-wrap justify-end gap-2 px-1 text-[11px] text-stone-400">
-                    <span className="font-data tabular-nums">第 {turnIndex + 1} 轮</span>
-                    <span>{turn.mode === "edit" ? "编辑图" : "文生图"}</span>
+                    <span className="font-data tabular-nums">Turn {turnIndex + 1}</span>
+                    <span>{turn.mode === "edit" ? "Image edit" : "Text-to-image"}</span>
                     <span>{formatConversationTime(turn.createdAt)}</span>
                   </div>
                   <div className="rounded-[22px] rounded-tr-md border border-stone-200/80 bg-white/90 px-4 py-3 text-left text-[14px] leading-6 text-stone-900 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-18px_rgba(15,23,42,0.22)] backdrop-blur sm:rounded-[26px] sm:rounded-tr-md sm:px-5 sm:py-3.5 sm:text-[15px] sm:leading-7">
@@ -356,13 +358,13 @@ export function ImageResults({
                       onClick={() => void onReuseTurnConfig(selectedConversation.id, turn.id)}
                       className="inline-flex h-7 items-center gap-1 rounded-full bg-white/80 px-2.5 text-[11px] font-medium text-stone-600 ring-1 ring-stone-200/80 transition hover:bg-stone-100 hover:text-stone-900"
                     >
-                      复用配置
+                      Reuse config
                     </button>
                     <button
                       type="button"
                       onClick={() => onDeletePrompt(selectedConversation.id, turn.id)}
                       className="inline-flex size-7 items-center justify-center rounded-full text-stone-300 transition hover:bg-stone-100 hover:text-stone-700"
-                      aria-label="删除提示词记录"
+                      aria-label="Delete prompt record"
                     >
                       <Trash2 className="size-3" />
                     </button>
@@ -376,7 +378,7 @@ export function ImageResults({
                 <div className="w-full p-1">
                   {turn.referenceImages.length > 0 ? (
                     <div className="mb-4 flex flex-col items-start">
-                      <div className="mb-2 text-[11px] font-medium text-stone-400 sm:text-xs">本轮参考图</div>
+                      <div className="mb-2 text-[11px] font-medium text-stone-400 sm:text-xs">Reference images for this turn</div>
                       <div className="flex flex-wrap gap-2 sm:gap-3">
                         {turn.referenceImages.map((image, index) => (
                           <div key={`${turn.id}-${image.name}-${index}`} className="flex flex-col items-start gap-1.5">
@@ -384,11 +386,11 @@ export function ImageResults({
                               type="button"
                               onClick={() => onOpenLightbox(referenceLightboxImages, index)}
                               className="group relative size-20 overflow-hidden rounded-2xl border border-stone-200/80 bg-stone-50 transition hover:border-stone-300 sm:size-24"
-                              aria-label={`预览参考图 ${image.name || index + 1}`}
+                              aria-label={`Preview reference image ${image.name || index + 1}`}
                             >
                               <img
                                 src={image.dataUrl}
-                                alt={image.name || `参考图 ${index + 1}`}
+                                alt={image.name || `Reference image ${index + 1}`}
                                 className="absolute inset-0 h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
                               />
                             </button>
@@ -398,7 +400,7 @@ export function ImageResults({
                               className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-medium text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
                             >
                               <Sparkles className="size-3" />
-                              加入编辑
+                              Add to edit
                             </button>
                           </div>
                         ))}
@@ -408,12 +410,12 @@ export function ImageResults({
 
                   {showImageGrid ? (
                     <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
-                      <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
+                      <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} images</span>
                       <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                       {turn.status === "queued" ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-3 py-1 text-stone-500">
                           <Clock3 className="size-3 text-stone-400" />
-                          等待前序任务完成
+                          Waiting for previous tasks to complete
                         </span>
                       ) : null}
                     </div>
@@ -449,12 +451,12 @@ export function ImageResults({
                                   }}
                                 />
                               </button>
-                              {/* 单格底部：左侧"结果 N + 尺寸"自适应截断，右侧 3 个按钮恒为图标。
-                                  3 列 grid 下每格 ≈ 视口 1/3，再叠中文 label 任何断点都挤不下，
-                                  曾出现"加入编辑"逐字竖排 bug。统一图标 + tooltip，按钮 shrink-0 + nowrap 兜底。 */}
+                              {/* Grid cell bottom: left side "Result N + size" truncated adaptively, right side always icon buttons.
+                                  In 3-col grid each cell ≈ 1/3 viewport, stacking text labels won't fit at any breakpoint.
+                                  Previously had vertical text bug with "Add to edit". Unified to icons + tooltip, buttons shrink-0 + nowrap as fallback. */}
                               <div className="flex items-center gap-2 px-0.5 py-1.5 text-[10px] sm:px-1 sm:py-2 sm:text-xs">
                                 <div className="min-w-0 flex-1 truncate whitespace-nowrap text-stone-400">
-                                  <span>结果 {index + 1}</span>
+                                  <span>Result {index + 1}</span>
                                   {imageMeta ? <span className="ml-2">{imageMeta}</span> : null}
                                 </div>
                                 <div className="flex shrink-0 items-center gap-1.5">
@@ -462,8 +464,8 @@ export function ImageResults({
                                     type="button"
                                     onClick={() => onContinueEdit(selectedConversation.id, image)}
                                     className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
-                                    aria-label="加入编辑"
-                                    title="加入编辑"
+                                    aria-label="Add to edit"
+                                    title="Add to edit"
                                   >
                                     <Sparkles className="size-3.5" />
                                   </button>
@@ -471,16 +473,16 @@ export function ImageResults({
                                     type="button"
                                     onClick={() => void downloadStoredImage(image, index)}
                                     className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-600 transition hover:bg-stone-200 hover:text-stone-900"
-                                    aria-label="下载"
-                                    title="下载"
+                                    aria-label="Download"
+                                    title="Download"
                                   >
                                     <Download className="size-3.5" />
                                   </button>
-                                  {/* 发布到画廊。state 控制视觉与是否可点：
-                                      - idle：可点击，默认描边按钮
-                                      - publishing：禁用 + 旋转图标
-                                      - published：禁用 + 对勾，title 提示"已发布"
-                                      - unsupported：禁用 + 灰显，title 提示原因（一般是 b64 直返不带 url） */}
+                                  {/* Publish to gallery. State controls visuals and clickability:
+                                      - idle: clickable, default outline button
+                                      - publishing: disabled + spinning icon
+                                      - published: disabled + checkmark, title shows "Published"
+                                      - unsupported: disabled + grayed out, title shows reason (usually b64 response without url) */}
                                   {(() => {
                                     const state = publishStateOf?.(image) ?? "idle";
                                     const disabled = state !== "idle";
@@ -492,10 +494,10 @@ export function ImageResults({
                                           : Share2;
                                     const label =
                                       state === "publishing"
-                                        ? "发布中"
+                                        ? "Publishing"
                                         : state === "published"
-                                          ? "已发布"
-                                          : "发布画廊";
+                                          ? "Published"
+                                          : "Publish to gallery";
                                     return (
                                       <button
                                         type="button"
@@ -505,10 +507,10 @@ export function ImageResults({
                                         disabled={disabled}
                                         title={
                                           state === "unsupported"
-                                            ? "本地图片暂无法发布到画廊"
+                                            ? "Local images cannot be published to gallery"
                                             : state === "published"
-                                              ? "已发布到画廊"
-                                              : "发布到画廊"
+                                              ? "Published to gallery"
+                                              : "Publish to gallery"
                                         }
                                         className={cn(
                                           "inline-flex size-7 shrink-0 items-center justify-center rounded-full transition",
@@ -537,9 +539,9 @@ export function ImageResults({
                         }
 
                       if (image.status === "error") {
-                        const errorMessage = image.error || "生成失败";
-                        // 额度不足是"配额"问题不是"模型反问"，重试/回复都没有意义，
-                        // 单独走一张安静的提示卡，引导用户联系管理员。
+                        const errorMessage = image.error || "Generation failed";
+                        // Insufficient quota is a "quota" issue not a "model question", retry/reply are meaningless.
+                        // Shows a dedicated quiet card guiding user to contact administrator.
                         if (isQuotaError(errorMessage)) {
                           return (
                             <div
@@ -550,7 +552,7 @@ export function ImageResults({
                                 type="button"
                                 onClick={() => onDeleteResults(selectedConversation.id, turn.id)}
                                 className="absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-full text-amber-500/70 transition hover:bg-white hover:text-rose-500"
-                                aria-label="删除生成结果"
+                                aria-label="Delete generation results"
                               >
                                 <Trash2 className="size-3" />
                               </button>
@@ -562,7 +564,7 @@ export function ImageResults({
                                   {errorMessage}
                                 </p>
                                 <p className="text-[11px] leading-4 text-amber-700/80 sm:text-[12px] sm:leading-5">
-                                  请联系管理员追加额度后再继续生成
+                                  Please contact the administrator to add quota before continuing
                                 </p>
                               </div>
                             </div>
@@ -588,7 +590,7 @@ export function ImageResults({
                                   className="inline-flex items-center gap-1 rounded-full bg-stone-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-stone-800 sm:px-3 sm:text-xs"
                                 >
                                   <RotateCcw className="size-3" />
-                                  重试
+                                  Retry
                                 </button>
                                 {onReplyToTurn && image.error ? (
                                   <div className="relative inline-flex items-center gap-1">
@@ -596,19 +598,19 @@ export function ImageResults({
                                       type="button"
                                       onClick={() => onReplyToTurn(selectedConversation.id, turn.id, image.error || "")}
                                       className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-stone-700 ring-1 ring-stone-200 transition hover:bg-stone-100 hover:text-stone-900 sm:px-3 sm:text-xs"
-                                      aria-label="基于该提问继续回复"
+                                      aria-label="Continue replying based on this prompt"
                                     >
                                       <Reply className="size-3" />
-                                      回复
+                                      Reply
                                     </button>
-                                    {/* Info 提示：纯 CSS peer-hover 实现，
-                                        鼠标悬浮 / 键盘聚焦 ! 图标时显示，离开即隐。
-                                        tooltip 是 pointer-events-none，不会反过来拦截鼠标，
-                                        所以不会出现之前那种"在触发区和卡片之间穿模"的闪烁。 */}
+                                    {/* Info tooltip: pure CSS peer-hover implementation.
+                                        Shows on mouse hover / keyboard focus on the ! icon, hides on leave.
+                                        Tooltip is pointer-events-none, won't intercept mouse events back,
+                                        avoiding the previous "flickering between trigger area and card" issue. */}
                                     <span
                                       tabIndex={0}
                                       role="button"
-                                      aria-label="为什么需要点回复"
+                                      aria-label="Why do I need to click reply"
                                       className="peer inline-flex size-5 cursor-help items-center justify-center rounded-full text-stone-400 ring-1 ring-stone-200 transition hover:bg-white hover:text-stone-700 focus:bg-white focus:text-stone-700 focus:outline-none"
                                     >
                                       <Info className="size-3" />
@@ -617,10 +619,10 @@ export function ImageResults({
                                       role="tooltip"
                                       className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-60 -translate-x-1/2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-left text-[11px] leading-5 text-stone-600 opacity-0 shadow-[0_2px_4px_rgba(15,23,42,0.04),0_12px_28px_-12px_rgba(15,23,42,0.25)] transition peer-hover:opacity-100 peer-focus:opacity-100 sm:text-[12px]"
                                     >
-                                      <p className="mb-1 font-medium text-stone-800">为什么要点"回复"？</p>
+                                      <p className="mb-1 font-medium text-stone-800">Why click "Reply"?</p>
                                       <p>
-                                        图片接口本身没有上下文。点"回复"会把这一轮的提问与参考图一起带给模型；
-                                        如果直接在下方输入框回答，模型只会当成一次新的画图请求，不知道你在回应它的反问。
+                                        The image API has no context by itself. Clicking "Reply" sends this turn's prompt and reference images together to the model;
+                                        if you type directly in the input box below, the model will treat it as a new image generation request without knowing you're responding to its question.
                                       </p>
                                     </div>
                                   </div>
@@ -641,13 +643,13 @@ export function ImageResults({
                                 <span className="inline-flex size-7 items-center justify-center rounded-full bg-white text-stone-400 shadow-sm sm:size-8">
                                   <Clock3 className="size-3.5 sm:size-4" />
                                 </span>
-                                <p className="text-[11px] leading-4 text-stone-500 sm:text-[13px]">排队中</p>
+                                <p className="text-[11px] leading-4 text-stone-500 sm:text-[13px]">Queued</p>
                               </div>
                             ) : (
                               <>
                                 <div aria-hidden className="dot-grid-loader absolute inset-0" />
                                 <div className="absolute top-2 left-3 text-[11px] font-medium text-stone-500 sm:top-3 sm:left-4 sm:text-xs">
-                                  正在创建图片
+                                  Creating image
                                 </div>
                               </>
                             )}
@@ -672,13 +674,13 @@ export function ImageResults({
                         className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 font-medium text-stone-500 transition hover:bg-stone-200 hover:text-stone-900"
                       >
                         <RotateCcw className="size-3" />
-                        全部重新生成
+                        Regenerate all
                       </button>
                       <button
                         type="button"
                         onClick={() => onDeleteResults(selectedConversation.id, turn.id)}
                         className="inline-flex size-6 items-center justify-center rounded-full text-stone-300 transition hover:bg-rose-50 hover:text-rose-500"
-                        aria-label="删除生成结果"
+                        aria-label="Delete generation results"
                       >
                         <Trash2 className="size-3" />
                       </button>
@@ -696,15 +698,15 @@ export function ImageResults({
 
 function getTurnStatusLabel(status: ImageTurnStatus) {
   if (status === "queued") {
-    return "排队中";
+    return "Queued";
   }
   if (status === "generating") {
-    return "处理中";
+    return "Processing";
   }
   if (status === "success") {
-    return "已完成";
+    return "Completed";
   }
-  return "失败";
+  return "Failed";
 }
 
 function formatBase64ImageSize(base64: string) {

@@ -31,7 +31,7 @@ class CodexImageRouteTests(unittest.TestCase):
                 return {
                     "access_token": token,
                     "type": "Plus",
-                    "status": "正常",
+                    "status": "normal",
                     "source_type": "codex",
                     "quota": 1,
                     "image_quota_unknown": True,
@@ -84,7 +84,7 @@ class CodexImageRouteTests(unittest.TestCase):
                 return {
                     "access_token": token,
                     "type": "Plus",
-                    "status": "正常",
+                    "status": "normal",
                     "source_type": "codex",
                     "quota": 1,
                     "image_quota_unknown": True,
@@ -119,7 +119,7 @@ class CodexImageRouteTests(unittest.TestCase):
                     )
                 ))
 
-        self.assertIn("4K 高清生成失败", str(context.exception))
+        self.assertIn("4K high-resolution generation failed", str(context.exception))
         generate_call = next(payload for kind, payload in calls if kind == "generate")
         self.assertEqual(generate_call["image_size"], "2160x3840")
         self.assertIn(("mark", {"token": "codex-token", "success": False}), calls)
@@ -141,7 +141,7 @@ class CodexImageRouteTests(unittest.TestCase):
                 return {
                     "access_token": token,
                     "type": "Plus",
-                    "status": "正常",
+                    "status": "normal",
                     "source_type": "codex",
                     "quota": 1,
                     "image_quota_unknown": True,

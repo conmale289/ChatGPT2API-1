@@ -181,16 +181,16 @@ class LoggedCall:
     summary: str
     started: float = field(default_factory=time.time)
     request_text: str = ""
-    # 上游真失败时的退款回调。路由层在 consume_user_quota 后注入，
-    # 第一参数 = 退款金额（一般 = 入口扣费金额）。
-    # 失败包括：
-    #   - dict 路径 ImageGenerationError / 普通 Exception
-    #   - 流式路径 first chunk 拉取异常
-    #   - 流式中途产出失败（self.stream finally 的 failed=True 分支）
-    # HTTPException 不退——这通常是路由层主动 raise 的业务错误（参数 / 鉴权），
-    # 业务侧已经在扣费前就 fail-fast，理论上走不到这里；防御性保留 raise。
+    # Refund callback when upstream genuinely fails. Injected by the route layer after consume_user_quota.
+    # First argument = refund amount (typically = entrance deduction amount).
+    # Failures include:
+    #   - Dict path ImageGenerationError / general Exception
+    #   - Stream path first chunk fetch exception
+    #   - Stream mid-way output failure (self.stream finally's failed=True branch)
+    # HTTPException is not refunded—this is typically a business error raised actively by the route layer (params / auth).
+    # The business logic fails fast before deduction, so this should not theoretically be reached; kept as a defensive raise.
     on_failure: "Callable[[int], None] | None" = None
-    # 失败时退多少。一般 = 入口扣费金额。
+    # How much to refund on failure. Typically = entrance deduction amount.
     failure_refund_amount: int = 1
 
     def _refund(self) -> None:
@@ -200,7 +200,7 @@ class LoggedCall:
         try:
             cb(int(self.failure_refund_amount))
         except Exception:
-            # 退款失败也不抛——主流程已经在返回错误响应了，再叠一个错误更糟
+            # Do not throw on refund failure - the main flow is already returning an error response, layering another error would be worse
             pass
 
     async def run(self, handler, *args, sse: str = "openai"):
@@ -209,45 +209,45 @@ class LoggedCall:
         try:
             result = await run_in_threadpool(handler, *args)
         except ImageGenerationError as exc:
-            self.log("调用失败", status="failed", error=str(exc))
+            self.log("Call failed", status="failed", error=str(exc))
             self._refund()
             return _image_error_response(exc)
         except HTTPException as exc:
-            self.log("调用失败", status="failed", error=str(exc.detail))
+            self.log("Call failed", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc))
+            self.log("Call failed", status="failed", error=str(exc))
             self._refund()
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
         if isinstance(result, dict):
-            self.log("调用完成", result)
+            self.log("Call completed", result)
             return result
 
         sender = anthropic_sse_stream if sse == "anthropic" else sse_json_stream
         try:
             has_first, first = await run_in_threadpool(_next_item, result)
         except ImageGenerationError as exc:
-            self.log("调用失败", status="failed", error=str(exc))
+            self.log("Call failed", status="failed", error=str(exc))
             self._refund()
             return _image_error_response(exc)
         except HTTPException as exc:
-            self.log("调用失败", status="failed", error=str(exc.detail))
+            self.log("Call failed", status="failed", error=str(exc.detail))
             raise
         except Exception as exc:
-            self.log("调用失败", status="failed", error=str(exc))
+            self.log("Call failed", status="failed", error=str(exc))
             self._refund()
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
         if not has_first:
-            self.log("流式调用结束")
+            self.log("Streaming call completed")
             return StreamingResponse(sender(()), media_type="text/event-stream")
         return StreamingResponse(sender(self.stream(itertools.chain([first], result))), media_type="text/event-stream")
 
     def stream(self, items):
         urls: list[str] = []
-        # 流式画图：手动收集 result chunk 的 data，结束时调归属。
-        # 之所以放这里而不是 api/ai.py：那边只在 dict 路径写归属，
-        # StreamingResponse 路径（Android 端走的）会跳过。
+        # Streaming image: manually collect data of result chunks, call ownership mapping at end.
+        # Done here instead of api/ai.py because that only writes ownership in dict paths,
+        # skipping StreamingResponse path (which Android client uses).
         image_result_data: list[dict[str, Any]] = []
         failed = False
         try:
@@ -260,26 +260,26 @@ class LoggedCall:
                 yield item
         except Exception as exc:
             failed = True
-            self.log("流式调用失败", status="failed", error=str(exc), urls=urls)
+            self.log("Streaming call failed", status="failed", error=str(exc), urls=urls)
             self._refund()
             raise
         finally:
             if not failed:
-                self.log("流式调用结束", urls=urls)
+                self.log("Streaming call completed", urls=urls)
                 if image_result_data:
-                    # 延迟 import 避免 services 间循环引用
+                    # Delayed import to avoid circular dependency between services
                     from services.image_owners_service import record_owner_for_result
                     from services.image_prompts_service import record_prompt_for_result
                     try:
                         record_owner_for_result(self.identity, image_result_data)
                     except Exception:
-                        # 写归属失败不影响流式响应本身
+                        # Writing owner failure does not affect the streaming response itself
                         pass
                     try:
-                        # request_text 是 LoggedCall 构造时传进来的原始 prompt 文本，
-                        # 跟 ai.py 的 /v1/images/generations / edits 入口一致。
-                        # endpoint 含 "edits" / "edit" 时按图生图标记，画廊发布时
-                        # 会自动把 prompt 落空（参考图修改指令对外人无复用价值）。
+                        # request_text is the raw prompt text passed when LoggedCall is constructed,
+                        # consistent with /v1/images/generations / edits entries in ai.py.
+                        # Marked as image edits if endpoint contains "edits"/"edit", which forces empty
+                        # prompt on gallery publish (image edits instruction has no reuse value to others without reference image).
                         ep = (self.endpoint or "").lower()
                         is_edit = "edits" in ep or "edit" in ep
                         record_prompt_for_result(

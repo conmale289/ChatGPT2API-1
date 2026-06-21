@@ -1,9 +1,9 @@
-"""聊天会话持久化：按 user_id 隔离，挂在 storage 抽象上做"统一备份"。
+"""Chat session persistence: isolated by user_id, attached to storage abstraction for unified backup.
 
-底层 backend 不感知用户，所有会话扁平存在同一份 chat_conversations 集合里；
-service 层在内存里按 user_id 过滤、按 updated_at 倒排。
-读写都拿全量、改一条、再整把覆盖回去——量级是个人级别（同一用户几百条），
-跟 accounts/auth_keys 的写法对齐，省掉额外索引。
+The underlying backend is user-unaware; all sessions are stored flat in the same chat_conversations collection.
+The service layer filters by user_id in memory and sorts by updated_at descending.
+Reads/writes fetch the full set, modify one record, and rewrite the whole set—data volume is at user level (hundreds of items per user),
+aligned with how accounts/auth_keys are handled, saving the need for extra indices.
 """
 from __future__ import annotations
 
@@ -62,8 +62,8 @@ def _normalize_record(value: object) -> dict[str, Any] | None:
 
 
 def _public_view(record: dict[str, Any]) -> dict[str, Any]:
-    """对外不暴露 upstream_account_token——后端拿来做换号续聊就够了，
-    前端没用上还会被一起备份/同步出去，没必要。"""
+    """Do not expose upstream_account_token to the outside—having the backend use it for resuming conversations with the same account is sufficient.
+    It's not used by the frontend and would be backed up/synchronized with it unnecessarily."""
     return {
         "id": record["id"],
         "title": record["title"],
@@ -122,7 +122,7 @@ class ChatService:
             items = self._load_all()
             existing = next((r for r in items if r["id"] == cid and r["user_id"] == user_id), None)
             if existing is None:
-                # 不要让前端伪造 user_id 改别人的会话——直接以登录身份覆盖。
+                # Do not let the frontend forge user_id to modify other people's sessions—overwrite directly with the logged-in identity.
                 if any(r["id"] == cid for r in items):
                     cid = uuid.uuid4().hex
                 record = {
@@ -160,8 +160,8 @@ class ChatService:
             return True
 
     def find_token_by_upstream(self, user_id: str, upstream_conversation_id: str) -> str:
-        """换号续聊'粘住号'用：通过 upstream cid 反查保存过的账号 token。
-        命中本用户的记录才返回，避免越权拿到别人的号。"""
+        """Used to 'stick' to an account when resuming a conversation: look up the saved account token via the upstream conversation ID.
+        Only returns records matching this user to prevent unauthorized access to other people's accounts."""
         if not user_id or not upstream_conversation_id:
             return ""
         with self._lock:

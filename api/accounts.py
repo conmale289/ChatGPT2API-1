@@ -142,11 +142,11 @@ def create_router() -> APIRouter:
 
     @router.get("/api/auth/me")
     async def get_my_identity(response: Response, authorization: str | None = Header(default=None)):
-        # 余额会随每次画图 / 对话动态变化，不能让浏览器/SPA 兜底 HTML 缓存住，
-        # 否则前端永远显示老值。明确禁止任何中间层缓存。
+        # The balance will change dynamically with each draw/chat, and should not be cached by the browser/SPA,
+        # otherwise the frontend will always display stale values. Explicitly prohibit any intermediate caching.
         response.headers["Cache-Control"] = "no-store"
         identity = require_identity(authorization)
-        # admin 走 _legacy_admin_identity 不走 auth_service，没 id；前端按全档 unlimited=True 处理。
+        # admin goes through _legacy_admin_identity instead of auth_service, with no id; frontend treats all categories as unlimited=True.
         item_id = str(identity.get("id") or "").strip()
         if not item_id or item_id == "admin":
             payload: dict[str, object] = {
@@ -172,7 +172,7 @@ def create_router() -> APIRouter:
             return {"identity": payload}
         record = auth_service.get_by_id(item_id)
         if record is None:
-            raise HTTPException(status_code=404, detail={"error": "用户不存在"})
+            raise HTTPException(status_code=404, detail={"error": "User does not exist"})
         return {"identity": record}
 
     @router.post("/api/auth/users")
@@ -209,37 +209,37 @@ def create_router() -> APIRouter:
     ):
         require_admin(authorization)
         candidate = body.model_dump(exclude_none=True)
-        # 名称和 key 不能为空字符串触发改动；其余 bool / int 全部按字面值透传到 service。
+        # Changes are triggered only if name and key are not empty strings; all other bool/int values are passed literally to the service.
         updates: dict[str, object] = {key: value for key, value in candidate.items() if key not in {"name", "key"}}
         if "name" in candidate:
             updates["name"] = candidate["name"]
         if "key" in candidate:
             updates["key"] = candidate["key"]
         if not updates:
-            raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
+            raise HTTPException(status_code=400, detail={"error": "No changes detected. Please modify before saving."})
         try:
             item = auth_service.update_key(key_id, updates, role="user")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         if item is None:
-            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+            raise HTTPException(status_code=404, detail={"error": "This user key does not exist; it may have been deleted."})
         return {"item": item, "items": auth_service.list_keys(role="user")}
 
     @router.delete("/api/auth/users/{key_id}")
     async def delete_user_key(key_id: str, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         if not auth_service.delete_key(key_id, role="user"):
-            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+            raise HTTPException(status_code=404, detail={"error": "This user key does not exist; it may have been deleted."})
         return {"items": auth_service.list_keys(role="user")}
 
     @router.get("/api/auth/users/{key_id}/key")
     async def reveal_user_key(key_id: str, response: Response, authorization: str | None = Header(default=None)):
-        # 任何中间层缓存都禁掉：明文密钥不能被代理 / 浏览器留底。
+        # Disable any intermediate caching: plaintext keys must not be stored by proxies or browsers.
         response.headers["Cache-Control"] = "no-store"
         require_admin(authorization)
         result = auth_service.reveal_key(key_id, role="user")
         if result is None:
-            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+            raise HTTPException(status_code=404, detail={"error": "This user key does not exist; it may have been deleted."})
         return result
 
     @router.post("/api/auth/users/{key_id}/regenerate")
@@ -257,7 +257,7 @@ def create_router() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         if result is None:
-            raise HTTPException(status_code=404, detail={"error": "这条用户密钥不存在，可能已经被删除"})
+            raise HTTPException(status_code=404, detail={"error": "This user key does not exist; it may have been deleted."})
         item, raw_key = result
         return {"item": item, "key": raw_key, "items": auth_service.list_keys(role="user")}
 
@@ -316,7 +316,7 @@ def create_router() -> APIRouter:
             raise HTTPException(status_code=400, detail={"error": "access_token is required"})
         updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota}.items() if value is not None}
         if not updates:
-            raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
+            raise HTTPException(status_code=400, detail={"error": "No changes detected. Please modify before saving."})
         account = account_service.update_account(access_token, updates)
         if account is None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})

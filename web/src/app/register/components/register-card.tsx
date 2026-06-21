@@ -53,8 +53,8 @@ export function RegisterCard() {
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const logs = config?.logs || [];
 
-  // 展开后把整个配置面板的底部滚到视口里。等一帧让 DOM 先渲染完，
-  // 否则 scrollIntoView 拿到的是没展开前的位置。
+  // After expanding, scroll the bottom of the config panel into view. Wait one frame for the DOM to render,
+  // otherwise scrollIntoView gets the position from before expansion.
   useEffect(() => {
     if (!configOpen) return;
     const raf = requestAnimationFrame(() => {
@@ -96,17 +96,17 @@ export function RegisterCard() {
         ? Number(stats.current_available || 0)
         : Number(stats.success || 0);
   const progress = targetTotal > 0 ? Math.min(100, Math.round((currentValue / targetTotal) * 100)) : 0;
-  const modeLabel = config.mode === "quota" ? "额度" : config.mode === "available" ? "可用账号" : "已注册";
+  const modeLabel = config.mode === "quota" ? "Quota" : config.mode === "available" ? "Available" : "Registered";
 
   const kpis: { label: string; value: string | number; tone?: "ok" | "warn" | "error" | "muted" }[] = [
-    { label: "成功", value: stats.success, tone: "ok" },
-    { label: "失败", value: stats.fail, tone: stats.fail > 0 ? "error" : "muted" },
-    { label: "完成", value: stats.done },
-    { label: "线程", value: `${stats.running}/${stats.threads}` },
-    { label: "平均", value: `${stats.avg_seconds || 0}s` },
-    { label: "已运行", value: `${stats.elapsed_seconds || 0}s` },
-    { label: "成功率", value: `${stats.success_rate || 0}%`, tone: (stats.success_rate || 0) >= 80 ? "ok" : "warn" },
-    { label: "额度", value: stats.current_quota || 0, tone: "muted" },
+    { label: "Success", value: stats.success, tone: "ok" },
+    { label: "Failed", value: stats.fail, tone: stats.fail > 0 ? "error" : "muted" },
+    { label: "Done", value: stats.done },
+    { label: "Threads", value: `${stats.running}/${stats.threads}` },
+    { label: "Avg", value: `${stats.avg_seconds || 0}s` },
+    { label: "Elapsed", value: `${stats.elapsed_seconds || 0}s` },
+    { label: "Rate", value: `${stats.success_rate || 0}%`, tone: (stats.success_rate || 0) >= 80 ? "ok" : "warn" },
+    { label: "Quota", value: stats.current_quota || 0, tone: "muted" },
   ];
   const updateProviderType = (index: number, type: string) => {
     updateProvider(index, {
@@ -153,11 +153,11 @@ export function RegisterCard() {
                     config.enabled ? "text-emerald-600" : "text-muted-foreground",
                   )}
                 >
-                  {config.enabled ? "运行中" : "空闲"}
+                  {config.enabled ? "Running" : "Idle"}
                 </span>
                 <span className="h-px w-6 bg-border" />
                 <span className="font-data text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-                  模式 · {config.mode === "total" ? "总数" : config.mode === "quota" ? "额度" : "可用"}
+                  Mode · {config.mode === "total" ? "Total" : config.mode === "quota" ? "Quota" : "Available"}
                 </span>
               </div>
               <div className="flex items-baseline gap-2">
@@ -189,7 +189,7 @@ export function RegisterCard() {
               ) : (
                 <Play className="size-4 fill-current" />
               )}
-              {config.enabled ? "停止" : "启动"}
+              {config.enabled ? "Stop" : "Start"}
             </Button>
             <Button
               variant="outline"
@@ -201,7 +201,7 @@ export function RegisterCard() {
               )}
               onClick={() => void repairAbnormal()}
               disabled={isSaving || (config.enabled && !isRepairingAbnormal)}
-              title={isRepairingAbnormal ? "停止修复" : "修复异常账号"}
+              title={isRepairingAbnormal ? "Stop Repair" : "Repair Abnormal Accounts"}
             >
               {isSaving ? (
                 <LoaderCircle className="size-4 animate-spin" />
@@ -210,14 +210,14 @@ export function RegisterCard() {
               ) : (
                 <Wrench className="size-4" />
               )}
-              {isRepairingAbnormal ? "停止修复" : "修复异常账号"}
+              {isRepairingAbnormal ? "Stop Repair" : "Repair Abnormal"}
             </Button>
             <Button
               variant="outline"
               className="h-10 cursor-pointer rounded-lg border-border bg-background px-3 text-foreground"
               onClick={() => void reset()}
               disabled={isSaving || config.enabled}
-              title="重置"
+              title="Reset"
             >
               <RotateCcw className="size-4" />
             </Button>
@@ -237,7 +237,7 @@ export function RegisterCard() {
             />
           </div>
           <div className="mt-1.5 flex items-center justify-between font-data text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-            <span>进度</span>
+            <span>Progress</span>
             <span className="tabular-nums">{progress}%</span>
           </div>
         </div>
@@ -268,7 +268,7 @@ export function RegisterCard() {
       {!config.enabled ? (
         <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           <AlertTriangle className="size-4 shrink-0" />
-          <span>启动前先保存配置。配置面板在最下方，支持折叠展开。</span>
+          <span>Save configuration before starting. The config panel is at the bottom and can be collapsed/expanded.</span>
         </div>
       ) : null}
 
@@ -337,7 +337,7 @@ export function RegisterCard() {
               <div className="font-data text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
                 Configuration
               </div>
-              <div className="text-[14px] font-semibold text-foreground">注册配置 · {providers.length} provider</div>
+              <div className="text-[14px] font-semibold text-foreground">Register Config · {providers.length} provider</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -351,7 +351,7 @@ export function RegisterCard() {
               disabled={isSaving || config.enabled}
             >
               {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
-              保存
+              Save
             </Button>
             {configOpen ? (
               <ChevronDown className="size-4 text-muted-foreground" />
@@ -369,56 +369,56 @@ export function RegisterCard() {
               </div>
               <div>
                 <div className="font-data text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">Configuration</div>
-                <h2 className="text-[15px] font-semibold tracking-tight text-foreground">注册配置</h2>
+                <h2 className="text-[15px] font-semibold tracking-tight text-foreground">Register Config</h2>
               </div>
             </div>
             <Button className="h-9 cursor-pointer rounded-lg bg-foreground px-4 text-background hover:bg-foreground/90" onClick={() => void save()} disabled={isSaving || config.enabled}>
               {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
-              保存配置
+              Save Config
             </Button>
           </div>
 
           <div className="grid gap-3 md:grid-cols-3">
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">注册模式</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Register Mode</label>
               <Select value={config.mode || "total"} onValueChange={(value) => setMode(value as "total" | "quota" | "available")} disabled={config.enabled}>
                 <SelectTrigger className="h-10 rounded-lg border-border bg-background">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="total">注册总数</SelectItem>
-                  <SelectItem value="quota">号池剩余额度</SelectItem>
-                  <SelectItem value="available">可用账号数量</SelectItem>
+                  <SelectItem value="total">Total Count</SelectItem>
+                  <SelectItem value="quota">Pool Remaining Quota</SelectItem>
+                  <SelectItem value="available">Available Accounts</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">注册总数</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Total Count</label>
               <Input value={String(config.total)} onChange={(event) => setTotal(event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled || config.mode !== "total"} />
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">线程数</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Threads</label>
               <Input value={String(config.threads)} onChange={(event) => setThreads(event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled} />
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">注册代理</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Proxy</label>
               <Input value={config.proxy} onChange={(event) => setProxy(event.target.value)} placeholder="http://127.0.0.1:7890" className="h-10 rounded-lg border-border bg-background font-data text-[13px]" disabled={config.enabled} />
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">目标剩余额度</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Target Remaining Quota</label>
               <Input value={String(config.target_quota || "")} onChange={(event) => setTargetQuota(event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled || config.mode !== "quota"} />
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">目标可用账号</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Target Available Accounts</label>
               <Input value={String(config.target_available || "")} onChange={(event) => setTargetAvailable(event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled || config.mode !== "available"} />
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">检查间隔（秒）</label>
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Check Interval (sec)</label>
               <Input value={String(config.check_interval || "")} onChange={(event) => setCheckInterval(event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled || config.mode === "total"} />
             </div>
             <div className="space-y-1.5">
-              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">指定账号密码</label>
-              <Input type="password" value={String(config.fixed_password || "")} onChange={(event) => setFixedPassword(event.target.value)} placeholder="留空=随机生成" className="h-10 rounded-lg border-border bg-background font-data text-[13px]" disabled={config.enabled} autoComplete="new-password" />
+              <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Fixed Password</label>
+              <Input type="password" value={String(config.fixed_password || "")} onChange={(event) => setFixedPassword(event.target.value)} placeholder="Leave empty = random" className="h-10 rounded-lg border-border bg-background font-data text-[13px]" disabled={config.enabled} autoComplete="new-password" />
             </div>
           </div>
 
@@ -426,25 +426,25 @@ export function RegisterCard() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="font-data text-[10px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">Mail Providers</div>
-                <h3 className="text-[14px] font-semibold text-foreground">邮箱配置</h3>
+                <h3 className="text-[14px] font-semibold text-foreground">Mail Config</h3>
               </div>
               <Button type="button" variant="outline" className="h-9 cursor-pointer rounded-lg border-border bg-background px-3 text-foreground" onClick={addProvider} disabled={config.enabled}>
                 <Plus className="size-4" />
-                添加
+                Add
               </Button>
             </div>
 
             <div className="grid gap-3 md:grid-cols-3">
               <div className="space-y-1.5">
-                <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">请求超时</label>
+                <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Request Timeout</label>
                 <Input value={String(config.mail.request_timeout || "")} onChange={(event) => setMailField("request_timeout", event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled} />
               </div>
               <div className="space-y-1.5">
-                <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">等待验证码超时</label>
+                <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Verification Code Timeout</label>
                 <Input value={String(config.mail.wait_timeout || "")} onChange={(event) => setMailField("wait_timeout", event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled} />
               </div>
               <div className="space-y-1.5">
-                <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">轮询间隔</label>
+                <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Poll Interval</label>
                 <Input value={String(config.mail.wait_interval || "")} onChange={(event) => setMailField("wait_interval", event.target.value)} className="h-10 rounded-lg border-border bg-background font-data tabular-nums" disabled={config.enabled} />
               </div>
             </div>
@@ -458,16 +458,16 @@ export function RegisterCard() {
                     <div className="flex items-center justify-between gap-3">
                       <label className="flex items-center gap-2.5 text-sm text-foreground">
                         <Checkbox checked={Boolean(provider.enable)} onCheckedChange={(checked) => updateProvider(index, { enable: Boolean(checked) })} disabled={config.enabled} />
-                        <span>启用</span>
+                        <span>Enable</span>
                       </label>
-                      <button type="button" className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50" onClick={() => deleteProvider(index)} disabled={config.enabled || providers.length <= 1} title="删除 provider">
+                      <button type="button" className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50" onClick={() => deleteProvider(index)} disabled={config.enabled || providers.length <= 1} title="Delete provider">
                         <Trash2 className="size-4" />
                       </button>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
-                        <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">类型</label>
+                        <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Type</label>
                         <Select value={type} onValueChange={(value) => updateProviderType(index, value)} disabled={config.enabled}>
                           <SelectTrigger className="h-10 rounded-lg border-border bg-background">
                             <SelectValue />
@@ -478,7 +478,7 @@ export function RegisterCard() {
                             <SelectItem value="moemail">moemail</SelectItem>
                             <SelectItem value="inbucket">inbucket_mail</SelectItem>
                             <SelectItem value="duckmail">duckmail</SelectItem>
-                            <SelectItem value="gptmail">gptmail(未测试)</SelectItem>
+                            <SelectItem value="gptmail">gptmail (untested)</SelectItem>
                             <SelectItem value="yyds_mail">yyds_mail</SelectItem>
                             <SelectItem value="cloudmail">cloudmail</SelectItem>
                           </SelectContent>
@@ -513,7 +513,7 @@ export function RegisterCard() {
                       {type === "inbucket" ? (
                         <label className="flex items-center gap-2.5 pt-7 text-sm text-foreground">
                           <Checkbox checked={Boolean(provider.random_subdomain ?? true)} onCheckedChange={(checked) => updateProvider(index, { random_subdomain: Boolean(checked) })} disabled={config.enabled} />
-                          <span>启用随机子域名</span>
+                          <span>Enable random subdomain</span>
                         </label>
                       ) : null}
                       {type === "tempmail_lol" || type === "moemail" || type === "duckmail" || type === "gptmail" || type === "yyds_mail" ? (
@@ -544,8 +544,8 @@ export function RegisterCard() {
 
                     {type === "tempmail_lol" || type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" || type === "cloudmail" ? (
                       <div className="space-y-1.5">
-                        <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">{type === "inbucket" ? "基础域名列表" : "Domain"}</label>
-                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder={type === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : type === "moemail" ? "每行一个域名" : type === "cloudmail" ? "每行一个域名，支持多域名轮询，可加 @ 前缀" : "每行一个域名，留空则使用服务默认域名"} className="min-h-20 rounded-lg border-border bg-background font-data text-[12px]" disabled={config.enabled} />
+                        <label className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">{type === "inbucket" ? "Base Domain List" : "Domain"}</label>
+                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder={type === "inbucket" ? "One base domain per line; random subdomains will be generated automatically" : type === "moemail" ? "One domain per line" : type === "cloudmail" ? "One domain per line, supports multi-domain rotation, prefix with @" : "One domain per line; leave empty to use service default domain"} className="min-h-20 rounded-lg border-border bg-background font-data text-[12px]" disabled={config.enabled} />
                       </div>
                     ) : null}
                   </div>

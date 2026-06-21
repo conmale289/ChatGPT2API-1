@@ -20,12 +20,12 @@ class AccountCapabilityTests(unittest.TestCase):
     def test_unknown_quota_accounts_are_available_only_when_not_throttled(self) -> None:
         self.assertFalse(
             AccountService._is_image_account_available(
-                {"status": "限流", "image_quota_unknown": True, "quota": 0}
+                {"status": "rate_limited", "image_quota_unknown": True, "quota": 0}
             )
         )
         self.assertTrue(
             AccountService._is_image_account_available(
-                {"status": "正常", "image_quota_unknown": True, "quota": 0}
+                {"status": "normal", "image_quota_unknown": True, "quota": 0}
             )
         )
 
@@ -35,12 +35,12 @@ class AccountCapabilityTests(unittest.TestCase):
 
         self.assertFalse(
             AccountService._is_image_account_available(
-                {"status": "限流", "image_quota_unknown": True, "quota": 0, "rate_limit_reset_at": future}
+                {"status": "rate_limited", "image_quota_unknown": True, "quota": 0, "rate_limit_reset_at": future}
             )
         )
         self.assertTrue(
             AccountService._is_image_account_available(
-                {"status": "限流", "image_quota_unknown": True, "quota": 0, "rate_limit_reset_at": past}
+                {"status": "rate_limited", "image_quota_unknown": True, "quota": 0, "rate_limit_reset_at": past}
             )
         )
 
@@ -169,7 +169,7 @@ class AccountCapabilityTests(unittest.TestCase):
             service.update_account(
                 "token-1",
                 {
-                    "status": "正常",
+                    "status": "normal",
                     "quota": 0,
                     "image_quota_unknown": True,
                 },
@@ -179,7 +179,7 @@ class AccountCapabilityTests(unittest.TestCase):
 
             self.assertIsNotNone(updated)
             self.assertEqual(updated["quota"], 0)
-            self.assertEqual(updated["status"], "正常")
+            self.assertEqual(updated["status"], "normal")
             self.assertTrue(updated["image_quota_unknown"])
 
     def test_mark_image_rate_limited_uses_codex_reset_headers(self) -> None:
@@ -189,7 +189,7 @@ class AccountCapabilityTests(unittest.TestCase):
             service.update_account(
                 "token-1",
                 {
-                    "status": "正常",
+                    "status": "normal",
                     "quota": 0,
                     "image_quota_unknown": True,
                 },
@@ -211,7 +211,7 @@ class AccountCapabilityTests(unittest.TestCase):
             after = datetime.now(timezone.utc)
 
             self.assertIsNotNone(updated)
-            self.assertEqual(updated["status"], "限流")
+            self.assertEqual(updated["status"], "rate_limited")
             self.assertEqual(updated["fail"], 1)
             reset_at = AccountService._parse_datetime(updated["rate_limit_reset_at"])
             self.assertIsNotNone(reset_at)
@@ -315,10 +315,10 @@ class AuthServiceTests(unittest.TestCase):
             first, _ = service.create_key(role="user", name="Alice")
             second, _ = service.create_key(role="user", name="Bob")
 
-            with self.assertRaisesRegex(ValueError, "这个名称已经在使用中了"):
+            with self.assertRaisesRegex(ValueError, "This name is already in use"):
                 service.create_key(role="user", name="Alice")
 
-            with self.assertRaisesRegex(ValueError, "这个名称已经在使用中了"):
+            with self.assertRaisesRegex(ValueError, "This name is already in use"):
                 service.update_key(second["id"], {"name": "Alice"}, role="user")
 
             updated = service.update_key(first["id"], {"name": "Alice"}, role="user")
@@ -329,7 +329,7 @@ class AuthServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
 
-            with self.assertRaisesRegex(ValueError, "画图月限额不能大于画图总额度"):
+            with self.assertRaisesRegex(ValueError, "Image monthly limit cannot be greater than Image total quota"):
                 service.create_key(
                     role="user",
                     name="Alice",
@@ -351,7 +351,7 @@ class AuthServiceTests(unittest.TestCase):
                 image_total_unlimited=False,
             )
 
-            with self.assertRaisesRegex(ValueError, "画图月限额不能大于画图总额度"):
+            with self.assertRaisesRegex(ValueError, "Image monthly limit cannot be greater than Image total quota"):
                 service.update_key(item["id"], {"image_monthly_quota": 200}, role="user")
 
 

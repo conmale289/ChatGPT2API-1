@@ -29,13 +29,13 @@ function Calendar({
         day: "relative size-9 p-0 text-center",
         day_button: "size-9 cursor-pointer rounded-lg text-sm transition hover:bg-stone-100 disabled:cursor-not-allowed",
         today: "font-semibold text-stone-950",
-        // 单日选中 / 区间端点：按钮变深，文字白。
+        // Single day selected / range endpoints: dark button, white text.
         selected: "[&>button]:bg-stone-900 [&>button]:text-white [&>button]:hover:bg-stone-800",
-        // 区间中段：浅灰色铺满，按钮去圆角且不抢眼，hover 略加深以区分。
-        // 用 ! 强制覆盖 selected 的深色背景，避免依赖 Tailwind 类生成顺序。
+        // Range middle: light gray fill, no border-radius on buttons, subtle hover darkening.
+        // Using ! to force override selected's dark background, avoiding dependence on Tailwind class generation order.
         range_middle:
           "[&>button]:!rounded-none [&>button]:!bg-stone-100 [&>button]:!text-stone-900 [&>button]:hover:!bg-stone-200",
-        // 端点朝向中段那一侧去掉圆角，使端点和中段在视觉上自然拼接。
+        // Remove border-radius on the side facing the middle segment, visually connecting endpoints to the range.
         range_start: "[&>button]:!rounded-r-none",
         range_end: "[&>button]:!rounded-l-none",
         outside: "text-stone-300",

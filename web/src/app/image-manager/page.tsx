@@ -26,9 +26,9 @@ function imageKey(item: ManagedImage) {
   return item.rel || item.url;
 }
 
-// 用户筛选下拉。max-h 限定 320px，列表本身用 .scrollbar-fancy 走自定义细滚动条，
-// 视觉风格与全局 stone 色系保持一致；空状态、未归属、已删用户都显式提示。
-// 三类语义置顶：全部用户 / 管理员（__admin__） / 未归属（__unowned__），其余具体用户在分隔线下面可搜索。
+// User filter dropdown. max-h capped at 320px, the list itself uses .scrollbar-fancy for custom thin scrollbar,
+// visual style consistent with the global stone color scheme; empty state, unowned, and deleted users are explicitly indicated.
+// Three semantic pinned items: All Users / Admin (__admin__) / Unowned (__unowned__), other specific users are searchable below the divider.
 function OwnerFilter({
   value,
   owners,
@@ -43,7 +43,7 @@ function OwnerFilter({
   onChange: (next: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  // 重置：每次重新打开下拉就清空搜索关键字，避免下次打开还停留在上次的过滤态。
+  // Reset: clear search keyword every time the dropdown is reopened, to avoid persisting last filter state on next open.
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
@@ -61,11 +61,11 @@ function OwnerFilter({
 
   const selected = owners.find((item) => item.id === value) ?? null;
   const buttonLabel = !value
-    ? "全部用户"
+    ? "All Users"
     : value === "__admin__"
-      ? "管理员"
+      ? "Admin"
       : value === "__unowned__"
-        ? "未归属"
+        ? "Unowned"
         : selected?.name || value;
   const totalCount =
     realOwners.reduce((sum, item) => sum + item.count, 0) +
@@ -100,7 +100,7 @@ function OwnerFilter({
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索用户"
+              placeholder="Search users"
               className="h-8 w-full rounded-lg border border-stone-200 bg-white pr-7 pl-7 text-[12.5px] text-stone-700 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none"
             />
             {query ? (
@@ -108,7 +108,7 @@ function OwnerFilter({
                 type="button"
                 onClick={() => setQuery("")}
                 className="absolute top-1/2 right-1.5 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-stone-600"
-                title="清除搜索"
+                title="Clear search"
               >
                 <X className="size-3" />
               </button>
@@ -116,18 +116,18 @@ function OwnerFilter({
           </div>
         </div>
         <div className="scrollbar-fancy max-h-[320px] overflow-y-auto py-1">
-          {/* 三个固定导航项：全部 / 管理员 / 未归属。query 非空也保持显示，
-              它们是导航类入口，搜索时也希望随时切回。 */}
+          {/* Three fixed navigation items: All / Admin / Unowned. They remain visible even when query is non-empty,
+              as they are navigation-type entries that should always be accessible. */}
           <OwnerOption
-            label="全部用户"
-            hint={`${totalCount} 张`}
+            label="All Users"
+            hint={`${totalCount} images`}
             selected={!value}
             onClick={() => onChange("")}
           />
           {adminBucket ? (
             <OwnerOption
-              label="管理员"
-              hint={`${adminBucket.count} 张`}
+              label="Admin"
+              hint={`${adminBucket.count} images`}
               special
               selected={value === "__admin__"}
               onClick={() => onChange("__admin__")}
@@ -135,8 +135,8 @@ function OwnerFilter({
           ) : null}
           {unownedBucket ? (
             <OwnerOption
-              label="未归属"
-              hint={`${unownedBucket.count} 张`}
+              label="Unowned"
+              hint={`${unownedBucket.count} images`}
               special
               selected={value === "__unowned__"}
               onClick={() => onChange("__unowned__")}
@@ -144,15 +144,15 @@ function OwnerFilter({
           ) : null}
           <div className="my-1 h-px bg-stone-100" />
           {realOwners.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-stone-400">还没有用户密钥</div>
+            <div className="px-3 py-6 text-center text-xs text-stone-400">No user keys yet</div>
           ) : filteredOwners.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-stone-400">没有匹配的用户</div>
+            <div className="px-3 py-6 text-center text-xs text-stone-400">No matching users</div>
           ) : (
             filteredOwners.map((item) => (
               <OwnerOption
                 key={item.id}
                 label={item.name}
-                hint={`${item.count} 张`}
+                hint={`${item.count} images`}
                 deleted={item.deleted}
                 selected={value === item.id}
                 onClick={() => onChange(item.id)}
@@ -199,7 +199,7 @@ function OwnerOption({
         <span className={`truncate ${special ? "text-stone-500" : ""}`}>{label}</span>
         {deleted ? (
           <Badge variant="secondary" className="rounded-md bg-rose-50 px-1.5 py-0 text-[10px] text-rose-600">
-            已删
+            Deleted
           </Badge>
         ) : null}
       </span>
@@ -210,9 +210,9 @@ function OwnerOption({
   );
 }
 
-// 模块级缓存。组件每次切回 image-manager 都会重新挂载，
-// 不缓存的话 items 从 [] 起跳、isLoading=true 让网格高度从 0 撑到 N 行，
-// 视觉上是设置页之外最严重的"跳动"页面。
+// Module-level cache. The component remounts every time user navigates back to image-manager,
+// without cache, items start from [] with isLoading=true causing grid height to jump from 0 to N rows,
+// visually the worst "jitter" page outside of settings.
 type ImageManagerCache = {
   items: ManagedImage[];
   allTags: string[];
@@ -254,7 +254,7 @@ function useLongPress(onLongPress: () => void, ms = LONG_PRESS_MS) {
 }
 
 function ImageManagerContent() {
-  // 命中缓存时直接拿来当初始 state，避免切回时网格塌缩成空再撑回。
+  // Use cache as initial state when available, to avoid grid collapsing to empty then expanding back on navigation.
   const [items, setItemsState] = useState<ManagedImage[]>(() => cachedImageManager?.items ?? []);
   const [startDate, setStartDate] = useState(() => cachedImageManager?.startDate ?? "");
   const [endDate, setEndDate] = useState(() => cachedImageManager?.endDate ?? "");
@@ -277,22 +277,22 @@ function ImageManagerContent() {
   const [deleteMode, setDeleteMode] = useState<"selected" | "filtered" | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  // 发布画廊状态：rel → "publishing" | "published"。
-  // admin 视角下未必由当前账号发的，被任何用户发过都标"已发布"，
-  // 后端 batch 接口在 admin 请求时自动按 check_any_publisher=True 跨用户查。
+  // Gallery publish state: rel → "publishing" | "published".
+  // From admin perspective, it may not be published by the current account; marked "published" if any user has published it,
+  // backend batch API automatically queries across users with check_any_publisher=True for admin requests.
   const [publishStates, setPublishStates] = useState<Map<string, "publishing" | "published">>(
     () => new Map(),
   );
-  // 发布者展示名：rel → publisher_name。仅用于已发布角标 tooltip 显示"由 xx 发布"，
-  // 帮 admin 在管理页快速辨认是谁发的。
+  // Publisher display name: rel → publisher_name. Only used for published badge tooltip to show "Published by xx",
+  // helps admin quickly identify who published it on the management page.
   const [publisherNames, setPublisherNames] = useState<Map<string, string>>(() => new Map());
-  // 没 prompt 时弹窗手填，复用 works 页同款模式
+  // When no prompt available, show dialog for manual input, reuses same pattern as works page
   const [pendingPublish, setPendingPublish] = useState<ManagedImage | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
   const [publishingDialog, setPublishingDialog] = useState(false);
 
-  // 写 items / allTags 同步刷新缓存，下次切回拿到最新值。
-  // 同时支持值与 functional updater 两种形式（旧代码大量用 setItems(prev => ...)）。
+  // Sync cache when writing items / allTags, so next navigation back gets the latest values.
+  // Supports both value and functional updater forms (legacy code heavily uses setItems(prev => ...)).
   const setItems = useCallback(
     (next: ManagedImage[] | ((prev: ManagedImage[]) => ManagedImage[])) => {
       setItemsState((prev) => {
@@ -329,8 +329,8 @@ function ImageManagerContent() {
   );
   const setOwners = useCallback(
     (next: ImageOwner[]) => {
-      // 兜底：永远只把数组写进 state 与缓存。dev 下 Fast Refresh 偶尔会把旧
-      // state slot 串过来，给后续 `for..of`/`.find` 等操作炸场，集中拦在写入处。
+      // Safety guard: always write only arrays to state and cache. During dev Fast Refresh occasionally
+      // passes stale state slots, which would crash subsequent `for..of`/`.find` operations; intercept at write point.
       const safe = Array.isArray(next) ? next : [];
       setOwnersState(safe);
       cachedImageManager = {
@@ -362,7 +362,7 @@ function ImageManagerContent() {
   const selectedSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
   const ownerNameById = useMemo(() => {
     const map = new Map<string, string>();
-    // dev Fast Refresh 偶尔会把旧 state slot 串到这里，防一下非数组场景
+    // dev Fast Refresh occasionally passes stale state slots here, guard against non-array scenario
     if (!Array.isArray(owners)) return map;
     for (const item of owners) {
       if (!item || typeof item !== "object") continue;
@@ -387,15 +387,15 @@ function ImageManagerContent() {
       setOwners(ownersData.items);
       setSelectedPaths((current) => current.filter((path) => data.items.some((item) => imageKey(item) === path)));
       setPage(1);
-      // 播种发布状态：admin 视角下后端会跨用户返回所有已发布的 rel。
-      // 不阻塞主流程；失败静默，下次 reload 再试。
+      // Seed publish states: admin perspective backend returns all published rels across users.
+      // Non-blocking for main flow; silently fails, retry on next reload.
       const rels = data.items.map((it) => it.rel).filter(Boolean);
       if (rels.length > 0) {
         try {
           const { items: published } = await getMyPublishedBatch(rels);
           setPublishStates((prev) => {
             const next = new Map(prev);
-            // 先清掉这一批 rel 的旧状态再写新状态——避免别人撤回了角标还残留
+            // Clear old states for this batch before writing new ones — prevents stale badges from remaining after someone unpublishes
             for (const rel of rels) next.delete(rel);
             for (const [rel, info] of Object.entries(published)) {
               if (info.published) next.set(rel, "published");
@@ -411,11 +411,11 @@ function ImageManagerContent() {
             return next;
           });
         } catch {
-          // 静默：拉不到发布状态不阻塞列表
+          // Silent: failure to fetch publish states should not block the list
         }
       }
     } catch (error) {
-      if (!silent) toast.error(error instanceof Error ? error.message : "加载图片失败");
+      if (!silent) toast.error(error instanceof Error ? error.message : "Failed to load images");
     } finally {
       if (!silent) setIsLoading(false);
     }
@@ -427,15 +427,15 @@ function ImageManagerContent() {
   }, []);
 
   /**
-   * 发布到画廊。admin 代发任意用户的图，后端 publish 路由对 admin 跳过 owner 校验。
-   *  - 已有 prompt：直接 publish，过敏感词 → 成功 → 给绿对勾视觉
-   *  - 没有 prompt：弹个对话框让 admin 手填（可留空），提交时再 publish
+   * Publish to gallery. Admin can publish any user's image; backend publish route skips owner validation for admin.
+   *  - Has prompt: publish directly, passes content filter → success → green checkmark visual
+   *  - No prompt: show dialog for admin to manually fill (can leave empty), publish on submit
    */
   const handlePublish = useCallback(
     async (item: ManagedImage, promptOverride?: string) => {
       const rel = item.rel;
       if (!rel) {
-        toast.error("当前图片无法发布");
+        toast.error("This image cannot be published");
         return;
       }
       let prompt: string;
@@ -444,7 +444,7 @@ function ImageManagerContent() {
       } else {
         prompt = (item.prompt ?? "").trim();
         if (!prompt) {
-          // 卡片自身没 prompt → 弹窗让 admin 决定补不补（留空也能发）
+          // Card itself has no prompt → show dialog for admin to decide whether to add one (empty is also fine)
           setPendingPublish(item);
           setPromptDraft("");
           return;
@@ -461,15 +461,15 @@ function ImageManagerContent() {
           height: item.height || 0,
         });
         setPublishStates((prev) => new Map(prev).set(rel, "published"));
-        toast.success("已发布到画廊");
+        toast.success("Published to gallery");
       } catch (error) {
-        // 失败回滚状态让用户可重试
+        // Rollback state on failure to allow retry
         setPublishStates((prev) => {
           const next = new Map(prev);
           next.delete(rel);
           return next;
         });
-        const message = error instanceof Error ? error.message : "发布失败";
+        const message = error instanceof Error ? error.message : "Publish failed";
         toast.error(message);
       }
     },
@@ -502,9 +502,9 @@ function ImageManagerContent() {
       await deleteManagedImages({ paths: [deleteTarget.rel] });
       setItems((prev) => prev.filter((item) => item.rel !== deleteTarget.rel));
       setSelectedPaths((prev) => prev.filter((p) => p !== imageKey(deleteTarget)));
-      toast.success("图片已删除");
+      toast.success("Image deleted");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除失败");
+      toast.error(error instanceof Error ? error.message : "Delete failed");
     } finally {
       setIsDeleting(false);
       closeDialog();
@@ -518,7 +518,7 @@ function ImageManagerContent() {
       const tagsData = await fetchImageTags();
       setAllTags(tagsData.tags);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "设置标签失败");
+      toast.error(error instanceof Error ? error.message : "Failed to set tags");
     }
   };
 
@@ -527,7 +527,7 @@ function ImageManagerContent() {
     if (!tag) return;
     const current = item.tags ?? [];
     if (current.includes(tag)) {
-      toast.error("标签已存在");
+      toast.error("Tag already exists");
       return;
     }
     void handleSetTags(item, [...current, tag]);
@@ -556,9 +556,9 @@ function ImageManagerContent() {
         ...item,
         tags: (item.tags ?? []).filter((t) => t !== tag),
       })));
-      toast.success(`标签"${tag}"已删除，影响 ${result.removed_from} 张图片`);
+      toast.success(`Tag "${tag}" deleted, affected ${result.removed_from} images`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除标签失败");
+      toast.error(error instanceof Error ? error.message : "Failed to delete tag");
     }
   };
 
@@ -598,12 +598,12 @@ function ImageManagerContent() {
           ? { start_date: startDate, end_date: endDate, owner, all_matching: true }
           : { paths: selectedPaths },
       );
-      toast.success(`已删除 ${data.removed} 张图片`);
+      toast.success(`Deleted ${data.removed} images`);
       setDeleteMode(null);
       setSelectedPaths([]);
       await loadImages();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除图片失败");
+      toast.error(error instanceof Error ? error.message : "Failed to delete images");
     } finally {
       setIsDeleting(false);
     }
@@ -615,9 +615,9 @@ function ImageManagerContent() {
     setIsDownloading(true);
     try {
       await downloadImages(paths);
-      toast.success(`已下载 ${paths.length} 张图片`);
+      toast.success(`Downloaded ${paths.length} images`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "下载失败");
+      toast.error(error instanceof Error ? error.message : "Download failed");
     } finally {
       setIsDownloading(false);
     }
@@ -627,8 +627,8 @@ function ImageManagerContent() {
     await downloadSingleImage(item.rel);
   };
 
-  // 首次挂载且缓存命中（filter 与缓存一致）→ 静默刷新；
-  // 之后改 filter 触发的 effect 都正常 spinner。
+  // First mount with cache hit (filter matches cache) → silent refresh;
+  // subsequent filter changes trigger effect with normal spinner.
   const isFirstRunRef = useRef(true);
   useEffect(() => {
     const isFirst = isFirstRunRef.current;
@@ -646,7 +646,7 @@ function ImageManagerContent() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-1">
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">Images</div>
-          <h1 className="text-2xl font-semibold tracking-tight">图片管理</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Image Manager</h1>
         </div>
         <div className="flex flex-wrap gap-2">
           <DateRangeFilter startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} />
@@ -661,15 +661,15 @@ function ImageManagerContent() {
             }}
           />
           <Button variant="outline" onClick={clearFilters} className="h-10 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
-            清除筛选条件
+            Clear Filters
           </Button>
           <Button onClick={() => void loadImages()} disabled={isLoading} className="h-10 rounded-xl bg-stone-950 px-4 text-white hover:bg-stone-800">
             {isLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}
-            查询
+            Search
           </Button>
           <Button variant="outline" onClick={() => setDeleteMode("filtered")} disabled={isDeleting || items.length === 0 || (!startDate && !endDate && !owner)} className="h-10 rounded-xl border-rose-200 bg-white px-4 text-rose-600 hover:bg-rose-50">
             <Trash2 className="size-4" />
-            删除匹配结果
+            Delete Matching Results
           </Button>
         </div>
       </div>
@@ -678,7 +678,7 @@ function ImageManagerContent() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-stone-500">
             <Tag className="mr-1 inline size-3.5" />
-            标签筛选：
+            Filter by Tag:
           </span>
           {allTags.map((tag) => {
             const isPressing = pressingTag === tag;
@@ -715,7 +715,7 @@ function ImageManagerContent() {
             <button type="button" onClick={() => setSelectedTags([])}>
               <Badge variant="secondary" className="cursor-pointer rounded-md">
                 <X className="mr-0.5 size-3" />
-                清除
+                Clear
               </Badge>
             </button>
           ) : null}
@@ -727,33 +727,33 @@ function ImageManagerContent() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-100 px-5 py-4">
             <div className="flex flex-wrap items-center gap-3 text-sm text-stone-600">
               <ImageIcon className="size-4" />
-              共 {filteredItems.length} 张
-              {selectedTags.length > 0 ? <span className="text-stone-400">（筛选自 {items.length} 张）</span> : null}
+              Total {filteredItems.length} images
+              {selectedTags.length > 0 ? <span className="text-stone-400">(filtered from {items.length} images)</span> : null}
               <label className="flex items-center gap-2">
                 <Checkbox checked={currentPageSelected} onCheckedChange={(checked) => togglePaths(currentRows.map(imageKey), Boolean(checked))} />
-                本页全选
+                Select Page
               </label>
               <label className="flex items-center gap-2">
                 <Checkbox checked={allSelected} onCheckedChange={(checked) => togglePaths(filteredItems.map(imageKey), Boolean(checked))} />
-                全选结果
+                Select All
               </label>
-              {selectedPaths.length > 0 ? <span>已选 {selectedPaths.length} 张</span> : null}
+              {selectedPaths.length > 0 ? <span>{selectedPaths.length} selected</span> : null}
             </div>
             <div className="flex items-center gap-2">
               <Button variant="ghost" className="h-8 rounded-lg px-3 text-stone-500" onClick={() => void loadImages()} disabled={isLoading}>
                 <RefreshCw className={`size-4 ${isLoading ? "animate-spin" : ""}`} />
-                刷新
+                Refresh
               </Button>
               <button type="button" className="text-sm text-stone-500 hover:text-stone-900 disabled:text-stone-300" onClick={() => setSelectedPaths([])} disabled={selectedPaths.length === 0 || isDeleting}>
-                取消选择
+                Deselect
               </button>
               <Button variant="outline" className="h-8 rounded-lg border-stone-200 bg-white px-3 text-stone-600 hover:bg-stone-50" onClick={() => void handleBatchDownload()} disabled={selectedPaths.length === 0 || isDownloading || isDeleting}>
                 {isDownloading ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
-                下载所选
+                Download Selected
               </Button>
               <Button variant="outline" className="h-8 rounded-lg border-rose-200 bg-white px-3 text-rose-600 hover:bg-rose-50" onClick={() => setDeleteMode("selected")} disabled={selectedPaths.length === 0 || isDeleting}>
                 <Trash2 className="size-4" />
-                删除所选
+                Delete Selected
               </Button>
             </div>
           </div>
@@ -787,21 +787,21 @@ function ImageManagerContent() {
                       <Maximize2 className="size-4" />
                     </span>
                   </button>
-                  {/* 左上"已发布"角标：只要这张图被任何人发布过画廊就显示。
-                      tooltip 注明发布者名（admin 视角下后端会附带 publisher_name），
-                      帮 admin 快速辨认是谁发的；普通登录态进不来这页。 */}
+                  {/* Top-left "Published" badge: displayed if any user has published this image to the gallery.
+                      Tooltip shows publisher name (backend attaches publisher_name for admin requests),
+                      helps admin quickly identify who published it; regular login cannot access this page. */}
                   {publishState === "published" ? (
                     <div
                       className="absolute top-2 left-2 z-10 rounded-md bg-emerald-500/95 px-2 py-1 text-[10.5px] font-semibold text-white shadow-sm"
-                      title={publishedBy ? `由 ${publishedBy} 发布` : "已发布到画廊"}
+                      title={publishedBy ? `Published by ${publishedBy}` : "Published to gallery"}
                     >
-                      已发布
+                      Published
                     </div>
                   ) : null}
                   <button
                     type="button"
                     className="absolute top-2 right-2 z-10 inline-flex size-7 items-center justify-center rounded-full bg-black/50 text-white opacity-100 transition hover:bg-red-600 sm:opacity-0 sm:group-hover:opacity-100"
-                    title="删除图片"
+                    title="Delete image"
                     onClick={(e) => {
                       e.stopPropagation();
                       openDeleteDialog(item);
@@ -819,8 +819,8 @@ function ImageManagerContent() {
                       </span>
                     </div>
                     <div className="flex items-center gap-1">
-                      {/* 发布到画廊：已发布时变 emerald 实色不可再点；publishing 转圈。
-                          stopPropagation 防止冒泡触发卡片大图。 */}
+                      {/* Publish to gallery: when published, turns emerald solid and non-clickable; publishing shows spinner.
+                          stopPropagation prevents bubbling to trigger card lightbox. */}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -837,9 +837,9 @@ function ImageManagerContent() {
                         title={
                           publishState === "published"
                             ? publishedBy
-                              ? `已发布到画廊（${publishedBy}）`
-                              : "已发布到画廊"
-                            : "发布到画廊"
+                              ? `Published to gallery (${publishedBy})`
+                              : "Published to gallery"
+                            : "Publish to gallery"
                         }
                       >
                         {publishState === "publishing" ? (
@@ -853,7 +853,7 @@ function ImageManagerContent() {
                         size="icon"
                         className="size-8 rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-700"
                         onClick={() => void handleSingleDownload(item)}
-                        title="下载图片"
+                        title="Download image"
                       >
                         <Download className="size-4" />
                       </Button>
@@ -863,7 +863,7 @@ function ImageManagerContent() {
                         className="size-8 rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-700"
                         onClick={() => {
                           void navigator.clipboard.writeText(item.url);
-                          toast.success("图片地址已复制");
+                          toast.success("Image URL copied");
                         }}
                       >
                         <Copy className="size-4" />
@@ -877,17 +877,17 @@ function ImageManagerContent() {
                   </div>
                   <div className="flex flex-wrap items-center gap-1">
                     {item.owner_id ? (() => {
-                      // 三类来源不同的展示规则：
-                      // - admin（包括旧 auth_key 的固定 id "admin"）：统一显示"管理员"，不暴露具体密钥名
-                      // - 普通用户：显示用户名（ownerNameById 已涵盖），找不到时兜底显示截断 id
-                      // - 真孤儿（owner_id 为空）：上面的条件已经过滤掉了
+                      // Three source display rules:
+                      // - admin (including legacy auth_key fixed id "admin"): uniformly display "Admin", don't expose specific key names
+                      // - regular users: display username (covered by ownerNameById), fallback to truncated id if not found
+                      // - true orphans (empty owner_id): already filtered out by the condition above
                       const isAdmin = item.is_admin_owner || item.owner_id === "admin";
-                      const display = isAdmin ? "管理员" : (ownerNameById.get(item.owner_id) || item.owner_id);
+                      const display = isAdmin ? "Admin" : (ownerNameById.get(item.owner_id) || item.owner_id);
                       return (
                         <Badge
                           variant="outline"
                           className="gap-0.5 rounded-md border-stone-200 bg-stone-50 px-1.5 py-0 text-[10px] font-medium text-stone-600"
-                          title={`生成者：${display}`}
+                          title={`Generator: ${display}`}
                         >
                           <User className="size-2.5 text-stone-400" />
                           <span className="max-w-[88px] truncate">{display}</span>
@@ -911,19 +911,19 @@ function ImageManagerContent() {
                         <button
                           type="button"
                           className="inline-flex size-5 items-center justify-center rounded-full border border-dashed border-stone-300 text-stone-400 hover:border-stone-500 hover:text-stone-600"
-                          title="添加标签"
+                          title="Add tag"
                         >
                           <Plus className="size-3" />
                         </button>
                       </PopoverTrigger>
                       <PopoverContent align="start" className="w-56 p-2">
                         <div className="space-y-2">
-                          <div className="text-xs font-medium text-stone-500">添加标签</div>
+                          <div className="text-xs font-medium text-stone-500">Add Tag</div>
                           <div className="flex gap-1">
                             <Input
                               value={tagInput}
                               onChange={(e) => setTagInput(e.target.value)}
-                              placeholder="输入标签名"
+                              placeholder="Enter tag name"
                               className="h-8 text-xs"
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
@@ -968,7 +968,7 @@ function ImageManagerContent() {
             )})}
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-stone-100 px-4 py-3 text-sm text-stone-500">
-            <span>第 {safePage} / {pageCount} 页，共 {filteredItems.length} 张</span>
+            <span>Page {safePage} / {pageCount}, {filteredItems.length} images total</span>
             <Button variant="outline" size="icon" className="size-9 rounded-lg border-stone-200 bg-white" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
               <ChevronLeft className="size-4" />
             </Button>
@@ -976,17 +976,17 @@ function ImageManagerContent() {
               <ChevronRight className="size-4" />
             </Button>
           </div>
-          {!isLoading && filteredItems.length === 0 ? <div className="px-6 py-14 text-center text-sm text-stone-500">没有找到图片</div> : null}
+          {!isLoading && filteredItems.length === 0 ? <div className="px-6 py-14 text-center text-sm text-stone-500">No images found</div> : null}
         </CardContent>
       </Card>
 
       <Dialog open={dialogVisible} onOpenChange={(open) => { if (!open) closeDialog(); }}>
         <DialogContent className="max-w-sm overflow-hidden rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="pr-8">确认删除</DialogTitle>
+            <DialogTitle className="pr-8">Confirm Delete</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-stone-600">
-            确定要删除这张图片吗？此操作不可恢复。
+            Are you sure you want to delete this image? This action cannot be undone.
           </p>
           {deleteTarget ? (
             <div className="flex items-center gap-3 overflow-hidden rounded-xl border border-stone-200 bg-stone-50 p-3">
@@ -1005,11 +1005,11 @@ function ImageManagerContent() {
           ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={closeDialog} className="rounded-xl">
-              取消
+              Cancel
             </Button>
             <Button variant="destructive" onClick={() => void handleDelete()} disabled={isDeleting} className="rounded-xl">
               {isDeleting ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Trash2 className="mr-1 size-4" />}
-              删除
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1025,18 +1025,18 @@ function ImageManagerContent() {
       <Dialog open={Boolean(deleteMode)} onOpenChange={(open) => (!open ? setDeleteMode(null) : null)}>
         <DialogContent showCloseButton={false} className="rounded-2xl p-6">
           <DialogHeader className="gap-2">
-            <DialogTitle>{deleteMode === "filtered" ? "删除匹配结果" : "删除所选图片"}</DialogTitle>
+            <DialogTitle>{deleteMode === "filtered" ? "Delete Matching Results" : "Delete Selected Images"}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-stone-600">
-            确认删除 {selectedCount} 张图片吗？删除后无法恢复。
+            Are you sure you want to delete {selectedCount} images? This action cannot be undone.
           </p>
           <DialogFooter>
             <Button variant="outline" className="rounded-xl" onClick={() => setDeleteMode(null)} disabled={isDeleting}>
-              取消
+              Cancel
             </Button>
             <Button className="rounded-xl bg-rose-600 text-white hover:bg-rose-700" onClick={() => void confirmDelete()} disabled={isDeleting || selectedCount === 0}>
               {isDeleting ? <LoaderCircle className="size-4 animate-spin" /> : null}
-              确认删除
+              Confirm Delete
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1044,14 +1044,14 @@ function ImageManagerContent() {
       <Dialog open={Boolean(tagDeleteTarget)} onOpenChange={(open) => { if (!open) setTagDeleteTarget(null); }}>
         <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
-            <DialogTitle>删除标签</DialogTitle>
+            <DialogTitle>Delete Tag</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-stone-600">
-            确定要删除标签 <span className="font-semibold">"{tagDeleteTarget}"</span> 吗？将从所有图片中移除该标签。
+            Are you sure you want to delete the tag <span className="font-semibold">"{tagDeleteTarget}"</span>? It will be removed from all images.
           </p>
           <DialogFooter>
             <Button variant="outline" className="rounded-xl" onClick={() => setTagDeleteTarget(null)}>
-              取消
+              Cancel
             </Button>
             <Button
               variant="destructive"
@@ -1061,14 +1061,14 @@ function ImageManagerContent() {
                 setTagDeleteTarget(null);
               }}
             >
-              确认删除
+              Confirm Delete
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 发布到画廊：当图片自身没保留 prompt（早期生成 / 图生图无文本）时
-          弹这个对话框让 admin 决定补不补。允许留空——后端 publish 已支持空 prompt。 */}
+      {/* Publish to gallery: when the image itself has no saved prompt (early generation / image-to-image without text),
+          this dialog lets admin decide whether to add one. Empty is allowed — backend publish supports empty prompt. */}
       <Dialog
         open={Boolean(pendingPublish)}
         onOpenChange={(open) => {
@@ -1080,9 +1080,9 @@ function ImageManagerContent() {
       >
         <DialogContent className="max-w-md rounded-2xl">
           <DialogHeader>
-            <DialogTitle>发布到画廊</DialogTitle>
+            <DialogTitle>Publish to Gallery</DialogTitle>
             <DialogDescription className="text-stone-500">
-              此图未保留生成时的 prompt，可以补一段描述，或直接留空发布。
+              This image has no saved prompt. You can add a description, or publish without one.
             </DialogDescription>
           </DialogHeader>
           {pendingPublish ? (
@@ -1102,7 +1102,7 @@ function ImageManagerContent() {
           <Input
             value={promptDraft}
             onChange={(e) => setPromptDraft(e.target.value)}
-            placeholder="可选：为这张图补一段 prompt"
+            placeholder="Optional: add a prompt for this image"
             className="h-10 rounded-xl"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !publishingDialog) {
@@ -1121,7 +1121,7 @@ function ImageManagerContent() {
               }}
               disabled={publishingDialog}
             >
-              取消
+              Cancel
             </Button>
             <Button
               className="rounded-xl bg-stone-950 text-white hover:bg-stone-800"
@@ -1129,7 +1129,7 @@ function ImageManagerContent() {
               disabled={publishingDialog}
             >
               {publishingDialog ? <LoaderCircle className="size-4 animate-spin" /> : <Share2 className="size-4" />}
-              发布
+              Publish
             </Button>
           </DialogFooter>
         </DialogContent>

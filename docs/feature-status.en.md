@@ -1,44 +1,44 @@
-# 功能状态
+# Feature Status
 
-本文基于当前仓库当前实现整理，用于帮助用户快速了解哪些功能已经可用、哪些仍在完善、哪些待实现。
+This document is compiled based on the current implementation of the repository to help users quickly understand which features are already available, which are being refined, and which are pending implementation.
 
-| 功能 | 状态 | 说明 |
+| Feature | Status | Description |
 |:----------------------------------------|:--:|:--------------------------------------------------------------|
-| OpenAI 兼容 `POST /v1/images/generations` | ✅  | 已支持，用于图片生成，并可通过 `n` 返回多张图片。 |
-| OpenAI 兼容 `POST /v1/images/edits` | ✅  | 已支持，可上传图片进行编辑。 |
-| 面向图片工作流的 `POST /v1/chat/completions` | ✅  | 已支持图片相关请求。 |
-| 面向图片工作流的 `POST /v1/responses` | ✅  | 已支持图片生成工具调用。 |
-| `GET /v1/models` 接口 | ✅  | 当前返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini`。 |
-| 同时生成多张图片 | ✅  | 已支持，后端与前端都可进行多图生成。 |
-| 前端图片工作台 | ✅  | 已支持图片生成、图片编辑、模型选择、历史记录与查看大图。 |
-| 前端图片输入 / 参考图交互 | ✅  | 已支持参考图上传、预览、移除和编辑模式工作流。 |
-| Codex 画图接口逆向 | ✅  | 已支持，仅 `Plus` / `Team` / `Pro` 订阅可用，模型别名为 `codex-gpt-image-2`；如有需要可自行在其他场景映射回 `gpt-image-2`。这是 Codex 逆向链路，用于和官网画图区分，同一账号通常会同时支持官网和 Codex 两份生图额度。 |
-| Cherry Studio 接入 | ✅  | 已支持作为绘图接口接入 Cherry Studio。 |
-| New API 接入 | ✅  | 已支持接入 New API。 |
-| 账号池管理 | ✅  | 已支持列表、筛选、批量操作、导出、手动编辑、刷新和删除。 |
-| 账号额度刷新与恢复时间同步 | ✅  | 已支持账号信息刷新，限流账号也会自动继续检查。图片生成遇到 429 / `rate_limit_exceeded` / `usage_limit_reached` 时会按 reset header 标记并恢复。 |
-| 失效 Token 自动清理 | ✅  | 已支持自动移除失效 Token。 |
-| CPA 连接管理 | ✅  | 已支持 CPA 连接的新增、修改、查询和删除。 |
-| CPA 文件浏览与按需导入 | ✅  | 已支持读取远程文件列表、筛选、勾选并导入到本地号池。 |
-| CPA 导入进度跟踪 | ✅  | 已支持导入进度展示与轮询更新。 |
-| `sub2api` 连接管理与账号浏览 | ✅  | 已支持 `sub2api` 服务器的新增、修改、删除、分组查询和 OpenAI OAuth 账号列表读取。 |
-| `sub2api` 导入 | ✅  | 已支持勾选 `sub2api` 中的 OpenAI OAuth 账号，批量拉取 `access_token` 导入本地号池，并展示导入进度。 |
-| Docker 自托管部署 | ✅  | 已支持 Docker Compose 部署，并提供多架构镜像。 |
-| 兼容接口中的多参考图能力 | ✅  | 已实现，支持在兼容接口中传入多参考图。 |
-| 更高级的 Token 调度策略 | ⚠️ | 当前已有基础轮询与限流刷新机制，更复杂的调度策略仍在完善中。 |
-| Render / Vercel 等部署表述 | ⚠️ | 当前主要以 Docker 部署为主，其他平台部署方式暂未重点说明。 |
-| `/v1/complete` 文本补全与流式输出 | ✅  | 已实现。 |
-| 流式输出支持 | ✅  | 已实现。 |
-| 图片画幅参数 | ✅  | 已支持 `size=1:1/16:9/9:16/4:3/3:4`，并会注入对应构图提示。 |
-| 图片清晰度参数 | ✅  | 已支持 `resolution=1k/2k/4k`。2K / 4K 走 Codex 高清路线，按 `Pro` → `Plus` → `Team` 账号池选择，并保持权限校验。 |
-| 服务端图片 URL 缓存 | ✅  | 已实现。 |
-| 配置与备份 | ✅ | 全局 `auth-key`、用户级密钥（含画图额度 + 对话日 / 月 / 总额度）和 admin / user 二级权限。 |
-| 用户密钥等级 | ✅ | 用户密钥支持普通 / 高级等级；普通用户只能使用 free 账号池和 1K 画图，高级用户可使用 Plus / Team / Pro 与 2K / 4K。 |
-| 用户密钥额度细化 | ✅ | 用户密钥支持画图日 / 月 / 总 + 对话日 / 月 / 总 共六档独立额度；任一档可勾选「不限额」；日 / 月按服务器本地时区自然日 / 自然月自动重置。 |
-| 用户密钥管理表格化 | ✅ | 用户密钥页改为表格视图，支持按名称模糊搜索（防抖 250ms），分页 10 / 20 / 50 / 100。 |
-| 用户密钥独立路由 | ✅ | 用户密钥管理独立为 `/keys` 页面（顶栏「用户密钥」入口，仅 admin 可见），从设置页拆出避免功能堆叠。 |
-| 用户密钥明文回显 | ✅ | 用户密钥在 `auth_keys.json` 同时落明文与哈希；admin 在密钥列表点眼睛图标即可查看 / 复制原始密钥；老数据只存哈希时支持「重置并生成新密钥」一键替换，旧密钥立即失效。 |
-| 额度计数包含关系 | ✅ | 一次画图 / 对话扣费会同时累加日 / 月 / 总三档 used（含勾选「不限额」的档），确保「日 ⊂ 月 ⊂ 总」一致；后续切换到限额时不会丢失历史使用数据。 |
-| `rt_token` 刷新 | ❌  | 待实现。 |
-| 代理配置功能 | ✅  | 已支持网页端配置全局 HTTP / HTTPS / SOCKS5 / SOCKS5H 代理，并应用到出站请求。 |
-| Anthropic 协议支持 | ❌  | 待实现。 |
+| OpenAI compatible `POST /v1/images/generations` | ✅  | Supported, used for image generation, and can return multiple images via `n`. |
+| OpenAI compatible `POST /v1/images/edits` | ✅  | Supported, allows uploading images for editing. |
+| `POST /v1/chat/completions` for image workflow | ✅  | Supported for image-related requests. |
+| `POST /v1/responses` for image workflow | ✅  | Supported for image generation tool calls. |
+| `GET /v1/models` endpoint | ✅  | Currently returns `gpt-image-2`, `codex-gpt-image-2`, `auto`, `gpt-5`, `gpt-5-1`, `gpt-5-2`, `gpt-5-3`, `gpt-5-3-mini`, `gpt-5-mini`. |
+| Generating multiple images simultaneously | ✅  | Supported, both backend and frontend can perform multi-image generation. |
+| Frontend image workbench | ✅  | Supported for image generation, image editing, model selection, history, and viewing high-res images. |
+| Frontend image input / reference image interaction | ✅  | Supported for reference image uploading, previewing, removing, and edit mode workflows. |
+| Codex drawing API reverse engineering | ✅  | Supported, only available for `Plus` / `Team` / `Pro` subscriptions, with the model alias `codex-gpt-image-2`; can be mapped back to `gpt-image-2` in other scenarios if needed. This is the Codex reverse engineered link to distinguish from official web drawing. A single account usually supports both official and Codex image generation quotas. |
+| Cherry Studio integration | ✅  | Supported as a drawing interface integration for Cherry Studio. |
+| New API integration | ✅  | Supported for New API integration. |
+| Account pool management | ✅  | Supported for listing, filtering, batch operations, exporting, manual editing, refreshing, and deleting. |
+| Account quota refresh & recovery time sync | ✅  | Supported for account info refreshing, rate-limited accounts are automatically checked. When image generation encounters 429 / `rate_limit_exceeded` / `usage_limit_reached`, it is marked and recovered according to the reset header. |
+| Invalid Token auto cleanup | ✅  | Supported for automatically removing invalid tokens. |
+| CPA connection management | ✅  | Supported for adding, modifying, querying, and deleting CPA connections. |
+| CPA file browsing & on-demand import | ✅  | Supported for reading remote file lists, filtering, selecting, and importing into the local account pool. |
+| CPA import progress tracking | ✅  | Supported for showing import progress and polling for updates. |
+| `sub2api` connection management & account browsing | ✅  | Supported for adding, modifying, deleting sub2api servers, group querying, and reading OpenAI OAuth account lists. |
+| `sub2api` import | ✅  | Supported for selecting OpenAI OAuth accounts in `sub2api`, batch pulling `access_token` to import into the local account pool, and showing import progress. |
+| Docker self-hosted deployment | ✅  | Supported for Docker Compose deployment and provides multi-architecture images. |
+| Multi-reference image capability in compatible endpoints | ✅  | Implemented, supports passing multiple reference images in compatible endpoints. |
+| Advanced token scheduling strategy | ⚠️ | Currently has basic polling and rate-limit refresh mechanisms; more complex scheduling strategies are being refined. |
+| Deployment instructions for Render / Vercel etc. | ⚠️ | Currently focuses mainly on Docker deployment; deployment methods on other platforms are not fully documented yet. |
+| `/v1/complete` text completion & streaming output | ✅  | Implemented. |
+| Streaming output support | ✅  | Implemented. |
+| Image aspect ratio parameters | ✅  | Supported for `size=1:1/16:9/9:16/4:3/3:4`, injecting corresponding composition prompts. |
+| Image resolution parameters | ✅  | Supported for `resolution=1k/2k/4k`. 2K / 4K routes go via Codex high-res, selected by `Pro` → `Plus` → `Team` account pools, maintaining permission validation. |
+| Server-side image URL caching | ✅  | Implemented. |
+| Config & backup | ✅ | Global `auth-key`, user-level keys (including drawing quota + chat daily/monthly/total quota) and admin/user two-tier permissions. |
+| User key tiers | ✅ | User keys support normal / premium tiers; normal users can only use the free account pool and 1K drawing, while premium users can use Plus / Team / Pro and 2K / 4K. |
+| User key quota granularity | ✅ | User keys support six independent quotas: drawing daily/monthly/total + chat daily/monthly/total; any tier can check "unlimited"; daily/monthly quotas automatically reset based on the server's local natural day/month. |
+| Tabular user key management | ✅ | User key page changed to a table view, supporting fuzzy search by name (250ms debounce) and pagination of 10 / 20 / 50 / 100. |
+| Independent routing for user keys | ✅ | User key management is isolated to the `/keys` page (accessible via "User Keys" in the top bar, only visible to admins), split from the settings page to avoid clutter. |
+| Plaintext recovery for user keys | ✅ | User keys are stored with both plaintext and hash in `auth_keys.json`; admins can click the eye icon in the key list to view/copy the original key; for legacy data storing only hashes, "Reset and generate new key" is supported, immediately invalidating the old key. |
+| Quota usage accumulation hierarchy | ✅ | A single drawing/chat deduction accumulates used amount across daily/monthly/total simultaneously (even if marked "unlimited"), ensuring consistency of "daily ⊂ monthly ⊂ total"; switching to limited quotas later will not lose historical usage data. |
+| `rt_token` refresh | ❌  | Pending implementation. |
+| Proxy configuration feature | ✅  | Supported for web-based configuration of global HTTP / HTTPS / SOCKS5 / SOCKS5H proxy, applied to all outbound requests. |
+| Anthropic protocol support | ❌  | Pending implementation. |

@@ -67,7 +67,7 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
     try:
         await run_in_threadpool(check_request, text)
     except HTTPException as exc:
-        call.log("调用失败", status="failed", error=str(exc.detail))
+        call.log("Call failed", status="failed", error=str(exc.detail))
         raise
 
 
@@ -91,21 +91,21 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         apply_image_account_policy(identity, payload)
-        # /v1 入口按 n 整体扣，1 次提交 = n 张。失败直接 402，不进 call.run。
+        # Deduct based on n at the /v1 entry: 1 submission = n images. Failure raises 402 directly, without entering call.run.
         n = max(1, int(body.n or 1))
         consume_user_quota(identity, n)
         payload["base_url"] = resolve_image_base_url(request)
-        # 上游真失败时把扣的 n 退回去——LoggedCall.run / stream 内部失败分支会自动回调。
-        # 这里 capture identity，failure_refund_amount 跟入口扣的金额一致。
+        # When the upstream actually fails, refund the deducted n -- the internal failure branches in LoggedCall.run/stream will automatically trigger the callback.
+        # Here we capture identity, and failure_refund_amount is set to match the deducted amount.
         call = LoggedCall(
-            identity, "/v1/images/generations", body.model, "文生图",
+            identity, "/v1/images/generations", body.model, "Text-to-Image",
             request_text=body.prompt,
             on_failure=lambda amount: refund_user_quota(identity, amount),
             failure_refund_amount=n,
         )
         await filter_or_log(call, body.prompt)
         result = await call.run(openai_v1_image_generations.handle, payload)
-        # 对接 dict 返回时把图片归属也写一下；StreamingResponse 不动。
+        # Write the image owner when a dict is returned; StreamingResponse remains untouched.
         if isinstance(result, dict):
             record_owner_for_result(identity, result.get("data"))
             record_prompt_for_result(body.prompt, result.get("data"))
@@ -138,11 +138,11 @@ def create_router() -> APIRouter:
             "stream": stream,
         }
         apply_image_account_policy(identity, payload)
-        # 同样按 n 整体扣，校验过 n 范围之后再扣，避免无效请求也被记账。
+        # Also deduct based on n as a whole, after validating the range of n, to avoid billing invalid requests.
         effective_n = max(1, int(n))
         consume_user_quota(identity, effective_n)
         call = LoggedCall(
-            identity, "/v1/images/edits", model, "图生图",
+            identity, "/v1/images/edits", model, "Image-to-Image",
             request_text=prompt,
             on_failure=lambda amount: refund_user_quota(identity, amount),
             failure_refund_amount=effective_n,
@@ -150,7 +150,7 @@ def create_router() -> APIRouter:
         await filter_or_log(call, prompt)
         uploads = [*(image or []), *(image_list or [])]
         if not uploads:
-            # 已扣的退掉——参数错误本质是 fail-fast，不该让用户白扣
+            # Refund the deducted amount -- parameter error is essentially fail-fast and shouldn't cause user loss.
             refund_user_quota(identity, effective_n)
             raise HTTPException(status_code=400, detail={"error": "image file is required"})
         images: list[tuple[bytes, str, str]] = []
@@ -165,8 +165,8 @@ def create_router() -> APIRouter:
         result = await call.run(openai_v1_image_edit.handle, payload)
         if isinstance(result, dict):
             record_owner_for_result(identity, result.get("data"))
-            # 图生图：标 is_edit=True，画廊发布时会把 prompt 强制落空，
-            # 因为离开参考图后这段修改指令对其它用户毫无复用价值。
+            # Image-to-image: mark is_edit=True, the gallery publishing will force prompt to be empty
+            # because once separated from the reference image, the modification prompt has no reuse value for other users.
             record_prompt_for_result(prompt, result.get("data"), is_edit=True)
         return result
 
@@ -176,7 +176,7 @@ def create_router() -> APIRouter:
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("prompt"), payload.get("messages"))
-        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", request_text=request_preview)
+        call = LoggedCall(identity, "/v1/chat/completions", model, "Text Generation", request_text=request_preview)
         await filter_or_log(call, request_preview)
         return await call.run(openai_v1_chat_complete.handle, payload)
 

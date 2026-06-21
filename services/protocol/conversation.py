@@ -179,21 +179,21 @@ def build_image_prompt(prompt: str, size: str | None) -> str:
     if not size:
         return prompt
     if size not in {"1:1", "16:9", "9:16", "4:3", "3:4"}:
-        return f"{prompt.strip()}\n\n输出图片，宽高比为 {size}。"
+        return f"{prompt.strip()}\n\nOutput image, aspect ratio is {size}."
     hint = {
-        "1:1": "输出为 1:1 正方形构图，主体居中，适合正方形画幅。",
-        "16:9": "输出为 16:9 横屏构图，适合宽画幅展示。",
-        "9:16": "输出为 9:16 竖屏构图，适合竖版画幅展示。",
-        "4:3": "输出为 4:3 比例，兼顾宽度与高度，适合展示画面细节。",
-        "3:4": "输出为 3:4 比例，纵向构图，适合人物肖像或竖向场景。",
+        "1:1": "Output is 1:1 square composition, subject centered, suitable for square format.",
+        "16:9": "Output is 16:9 landscape composition, suitable for wide screen display.",
+        "9:16": "Output is 9:16 portrait composition, suitable for vertical display.",
+        "4:3": "Output is 4:3 aspect ratio, balancing width and height, suitable for detailed shots.",
+        "3:4": "Output is 3:4 aspect ratio, vertical composition, suitable for portraits or vertical scenes.",
     }[size]
     return f"{prompt.strip()}\n\n{hint}"
 
 
 IMAGE_RESOLUTION_HINTS = {
-    "1k": "目标输出分辨率为 1K 级别，优先保证构图稳定和主体清晰。",
-    "2k": "目标输出分辨率为 2K 级别，尽可能输出长边约 2048px 的高清图片，保留细节纹理。",
-    "4k": "目标输出分辨率为 4K 级别，尽可能输出接近 3840px 长边的超清图片，保留丰富细节和干净边缘。",
+    "1k": "Target output resolution is 1K level, prioritizing stable composition and clear subject.",
+    "2k": "Target output resolution is 2K level, outputting a high-definition image with a long edge of about 2048px, preserving detailed textures.",
+    "4k": "Target output resolution is 4K level, outputting an ultra-clear image with a long edge close to 3840px, preserving rich details and clean edges.",
 }
 
 
@@ -1010,7 +1010,7 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                         "error": last_error,
                     })
                     raise ImageGenerationError(
-                        f"{str(normalized_resolution).upper()} 高清生成失败，未降级为普通清晰度。原因：{message}",
+                        f"{str(normalized_resolution).upper()} high-resolution generation failed, did not downgrade to normal resolution. Reason: {message}",
                         code="high_resolution_generation_failed",
                     ) from exc
         attempted_image_tokens: set[str] = set()
@@ -1140,18 +1140,18 @@ def stream_chat_events(
     plan_type: str | None = None,
     plan_types: set[str] | tuple[str, ...] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """/api/chat/stream 专用通道：history_and_training_disabled=False，
-    暴露 conversation_id 供调用方做异步 DELETE。失效 token 单次轮换。
-    preferred_token 用于续聊场景'粘住'原账号；excluded_tokens 用于'手动换号'
-    排除旧号；上游每轮都开新 cid，靠完整历史维持上下文，避免和 done 后的 DELETE
-    自相矛盾。"""
+    """Dedicated channel for /api/chat/stream: history_and_training_disabled=False,
+    exposing conversation_id for the caller to perform asynchronous DELETE. Expired tokens are rotated once.
+    preferred_token is used in continuation scenarios to 'stick' to the original account; excluded_tokens is used for 'manual account rotation'
+    to exclude old accounts; the upstream starts a new cid every round, relying on complete history to maintain context, avoiding conflict
+    with the DELETE after done."""
     attempted: set[str] = set(excluded_tokens or ())
     token = ""
     if preferred_token and preferred_token not in attempted:
         account = account_service.get_account(preferred_token)
         if (
                 account
-                and str(account.get("status") or "") not in {"禁用", "异常"}
+                and str(account.get("status") or "") not in {"disabled", "abnormal"}
                 and account_service._account_matches_plan_type(account, plan_type)
                 and account_service._account_matches_any_plan_type(account, plan_types)
         ):
@@ -1196,7 +1196,7 @@ def stream_chat_events(
 
 
 def delete_conversation_safely(token: str, conversation_id: str) -> None:
-    """异步 DELETE 用：失败吞掉。"""
+    """For async DELETE: swallow failure."""
     if not token or not conversation_id:
         return
     try:

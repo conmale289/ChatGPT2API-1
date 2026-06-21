@@ -4,13 +4,13 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 /**
- * 路由切换时给页面内容做轻量淡入。
+ * Lightweight fade-in animation for page content on route changes.
  *
- * 实现：用 pathname 作为 key 强制 React 在路径变化时丢掉旧子树、
- * 挂上新子树，新子树挂载瞬间触发 CSS animation。
+ * Implementation: uses pathname as key to force React to discard the old subtree
+ * and mount a new one on path change, triggering a CSS animation on mount.
  *
- * 不会破坏任何 fixed 定位元素（TopNav / RouteProgress / Toaster
- * 都在这个容器之外），也不会影响 main 的滚动条 gutter。
+ * Does not break any fixed-position elements (TopNav / RouteProgress / Toaster
+ * are all outside this container), nor affect the main scrollbar gutter.
  */
 export function PageTransition({ children }: { children: ReactNode }) {
   const pathname = usePathname();

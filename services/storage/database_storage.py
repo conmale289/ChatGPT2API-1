@@ -13,16 +13,16 @@ Base = declarative_base()
 
 
 class AccountModel(Base):
-    """账号数据模型"""
+    """Account data model"""
     __tablename__ = "accounts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     access_token = Column(String(2048), unique=True, nullable=False, index=True)
-    data = Column(Text, nullable=False)  # JSON 格式存储完整账号数据
+    data = Column(Text, nullable=False)  # Store complete account data in JSON format
 
 
 class AuthKeyModel(Base):
-    """鉴权密钥数据模型"""
+    """Authentication key data model"""
     __tablename__ = "auth_keys"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -31,10 +31,10 @@ class AuthKeyModel(Base):
 
 
 class GalleryItemModel(Base):
-    """画廊条目数据模型。
-    跟 accounts/auth_keys 一样的 (主键 + business_key + JSON data) 存储模式：
-    业务字段都塞进 data 的 JSON 里，列表/筛选靠 service 层在内存里排序分页。
-    数据量预期不大（公开发布 ≪ 全部生成），不必上索引/列拆分。
+    """Gallery item data model.
+    Same storage mode as accounts/auth_keys (primary key + business_key + JSON data):
+    Business fields are stuffed into the data JSON, and listing/filtering is handled by the service layer with in-memory sorting and pagination.
+    Data volume is expected to be small (public releases ≪ total generated), so no index/column splitting is necessary.
     """
     __tablename__ = "gallery_items"
 
@@ -52,20 +52,20 @@ class ChatConversationModel(Base):
 
 
 class DatabaseStorageBackend(StorageBackend):
-    """数据库存储后端（支持 SQLite、PostgreSQL、MySQL 等）"""
+    """Database storage backend (supports SQLite, PostgreSQL, MySQL, etc.)"""
 
     def __init__(self, database_url: str):
         self.database_url = database_url
         self.engine = create_engine(
             database_url,
-            pool_pre_ping=True,  # 自动检测连接是否有效
-            pool_recycle=3600,   # 1小时回收连接
+            pool_pre_ping=True,  # Automatically detect if connection is valid
+            pool_recycle=3600,   # Recycle connection after 1 hour
         )
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
     def load_accounts(self) -> list[dict[str, Any]]:
-        """从数据库加载账号数据"""
+        """Load account data from the database"""
         session = self.Session()
         try:
             accounts = []
@@ -81,23 +81,23 @@ class DatabaseStorageBackend(StorageBackend):
             session.close()
 
     def save_accounts(self, accounts: list[dict[str, Any]]) -> None:
-        """保存账号数据到数据库"""
+        """Save account data to the database"""
         self._save_rows(AccountModel, accounts, "access_token")
 
     def load_auth_keys(self) -> list[dict[str, Any]]:
-        """从数据库加载鉴权密钥数据"""
+        """Load authentication key data from the database"""
         return self._load_rows(AuthKeyModel)
 
     def save_auth_keys(self, auth_keys: list[dict[str, Any]]) -> None:
-        """保存鉴权密钥数据到数据库"""
+        """Save authentication key data to the database"""
         self._save_rows(AuthKeyModel, auth_keys, "id", "key_id")
 
     def load_gallery_items(self) -> list[dict[str, Any]]:
-        """从数据库加载画廊条目"""
+        """Load gallery items from the database"""
         return self._load_rows(GalleryItemModel)
 
     def save_gallery_items(self, items: list[dict[str, Any]]) -> None:
-        """保存画廊条目到数据库"""
+        """Save gallery items to the database"""
         self._save_rows(GalleryItemModel, items, "id", "item_id")
 
     def load_chat_conversations(self) -> list[dict[str, Any]]:
@@ -151,11 +151,11 @@ class DatabaseStorageBackend(StorageBackend):
             session.close()
 
     def health_check(self) -> dict[str, Any]:
-        """健康检查"""
+        """Health check"""
         try:
             session = self.Session()
             try:
-                # 尝试执行简单查询
+                # Attempt to execute simple query
                 session.execute(text("SELECT 1"))
                 count = session.query(AccountModel).count()
                 auth_key_count = session.query(AuthKeyModel).count()
@@ -180,7 +180,7 @@ class DatabaseStorageBackend(StorageBackend):
             }
 
     def get_backend_info(self) -> dict[str, Any]:
-        """获取存储后端信息"""
+        """Get storage backend information"""
         db_type = "unknown"
         if "sqlite" in self.database_url:
             db_type = "sqlite"
@@ -192,13 +192,13 @@ class DatabaseStorageBackend(StorageBackend):
         return {
             "type": "database",
             "db_type": db_type,
-            "description": f"数据库存储 ({db_type})",
+            "description": f"Database storage ({db_type})",
             "database_url": self._mask_password(self.database_url),
         }
 
     @staticmethod
     def _mask_password(url: str) -> str:
-        """隐藏数据库连接字符串中的密码"""
+        """Hide password in database connection string"""
         if "://" not in url:
             return url
         try:

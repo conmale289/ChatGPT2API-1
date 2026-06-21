@@ -54,7 +54,7 @@ export const useChatConversationsStore = create<ChatConversationsState>((set, ge
         loadError: "",
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "加载会话失败";
+      const message = error instanceof Error ? error.message : "Failed to load conversations";
       set({ isLoading: false, loadError: message });
       throw error;
     }

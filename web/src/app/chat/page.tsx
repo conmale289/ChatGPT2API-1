@@ -144,7 +144,7 @@ function buildAssistantMarkdownComponents(
           type="button"
           className="group my-2 block size-36 cursor-zoom-in overflow-hidden rounded-xl border border-border/60 bg-background p-0 shadow-sm sm:size-40"
           onClick={() => onOpenImage?.(imageSrc)}
-          aria-label="打开图片预览"
+          aria-label="Open image preview"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -184,7 +184,7 @@ function ChatImageGeneratingPlaceholder() {
     <div className="relative h-28 w-56 max-w-full overflow-hidden rounded-xl bg-stone-100/80 dark:bg-stone-900/60">
       <div aria-hidden className="dot-grid-loader absolute inset-0" />
       <div className="absolute top-2 left-3 text-[11px] font-medium text-stone-500 dark:text-stone-400">
-        正在创建图片
+        Creating image
       </div>
     </div>
   );
@@ -194,7 +194,7 @@ function ChatThinkingStatus() {
   return (
     <div className="flex items-center gap-2 text-[13px] leading-5 text-muted-foreground">
       <LoaderCircle className="size-4 shrink-0 animate-spin" />
-      <span>正在思考...</span>
+      <span>Thinking...</span>
     </div>
   );
 }
@@ -214,7 +214,7 @@ function ChatImageThumbnails({ content, onOpenImage }: { content: string; onOpen
           type="button"
           className="group block size-36 cursor-zoom-in overflow-hidden rounded-xl border border-border/60 bg-background p-0 shadow-sm sm:size-40"
           onClick={() => onOpenImage(src)}
-          aria-label="打开图片预览"
+          aria-label="Open image preview"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -229,9 +229,9 @@ function ChatImageThumbnails({ content, onOpenImage }: { content: string; onOpen
 }
 
 const EMPTY_PROMPTS = [
-  "画一张雨夜霓虹街景",
-  "帮我优化这段提示词",
-  "生成一个圆润的应用图标",
+  "Draw a rainy neon street scene",
+  "Help me refine this prompt",
+  "Generate a rounded app icon",
 ];
 
 function ChatHistoryEmptyState() {
@@ -245,9 +245,9 @@ function ChatHistoryEmptyState() {
           <Sparkles className="size-2.5" />
         </span>
       </div>
-      <div className="text-[13px] font-medium text-foreground">还没有历史会话</div>
+      <div className="text-[13px] font-medium text-foreground">No conversation history</div>
       <div className="mt-1 max-w-[180px] text-[11px] leading-5 text-muted-foreground">
-        新的对话会自动保存在这里，方便继续追问和复用图片上下文。
+        New conversations are automatically saved here for easy follow-up and image context reuse.
       </div>
     </div>
   );
@@ -260,9 +260,9 @@ function ChatEmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => vo
         <div className="mx-auto mb-5 grid size-14 place-items-center rounded-2xl border border-border/70 bg-background shadow-[0_18px_50px_-28px_rgba(15,23,42,0.45)]">
           <ImageIcon className="size-5 text-foreground" />
         </div>
-        <div className="text-[15px] font-semibold tracking-tight text-foreground">开始新的创作对话</div>
+        <div className="text-[15px] font-semibold tracking-tight text-foreground">Start a new creative conversation</div>
         <p className="mx-auto mt-2 max-w-[390px] text-[12px] leading-6 text-muted-foreground">
-          可以直接聊天，也可以让它生成图片；对话里的图片支持点开预览，并能在后续追问中被引用。
+          Chat freely or ask it to generate images; images in the conversation can be previewed and referenced in follow-up messages.
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           {EMPTY_PROMPTS.map((prompt) => (
@@ -288,11 +288,11 @@ function createId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-// 第一句用户输入截前 24 个字做标题，做不到的退回到“新对话”。
+// Use first 24 chars of first user input as title, fallback to "New Conversation".
 function deriveTitle(messages: ChatPersistedMessage[]): string {
   const firstUser = messages.find((m) => m.role === "user");
   const text = (firstUser?.content || "").trim().replace(/\s+/g, " ");
-  if (!text) return "新对话";
+  if (!text) return "New Conversation";
   return text.length > 24 ? `${text.slice(0, 24)}…` : text;
 }
 
@@ -315,7 +315,7 @@ function formatTime(value: number): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+  return new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
     .format(date);
 }
 
@@ -349,7 +349,7 @@ function ChatPageContent() {
 
   useEffect(() => {
     void loadConversations().catch((error) => {
-      const message = error instanceof Error ? error.message : "加载会话失败";
+      const message = error instanceof Error ? error.message : "Failed to load conversations";
       toast.error(message);
     });
   }, [loadConversations]);
@@ -367,7 +367,7 @@ function ChatPageContent() {
       })
       .catch((error) => {
         if (cancelled) return;
-        const message = error instanceof Error ? error.message : "加载账号类型失败";
+        const message = error instanceof Error ? error.message : "Failed to load account types";
         toast.error(message);
       });
     return () => {
@@ -467,7 +467,7 @@ function ChatPageContent() {
     };
   }, []);
 
-  // 流式输出时只在用户本来贴底的情况下同步跟随，避免 smooth 动画反复叠加导致闪抖。
+  // During streaming, only auto-scroll when the user is already near the bottom, avoiding jitter from repeated smooth animations.
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
@@ -539,7 +539,7 @@ function ChatPageContent() {
           resetSession();
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "删除失败";
+        const message = error instanceof Error ? error.message : "Delete failed";
         toast.error(message);
       } finally {
         setPendingDelete("");
@@ -603,7 +603,7 @@ function ChatPageContent() {
       savedConversationId = saved.id;
       setActiveId(saved.id);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "会话保存失败";
+      const message = error instanceof Error ? error.message : "Failed to save conversation";
       toast.error(message);
     }
 
@@ -642,7 +642,7 @@ function ChatPageContent() {
       if (controller.signal.aborted) {
         return;
       }
-      const message = error instanceof Error ? error.message : "对话失败";
+      const message = error instanceof Error ? error.message : "Chat failed";
       setMessages((prev) =>
         prev.map((m) => (m.id === assistantMessage.id ? { ...m, status: "error", error: message } : m)),
       );
@@ -663,7 +663,7 @@ function ChatPageContent() {
       return;
     }
     if (!assistantContent.trim()) {
-      const message = "上游没有返回内容";
+      const message = "No content returned from upstream";
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMessage.id
@@ -675,7 +675,7 @@ function ChatPageContent() {
       return;
     }
 
-    // done 之后一次性整条覆盖保存：包含完整历史 + upstream cid，给后端做 token 回填。
+    // After done, save the full message in one go: includes complete history + upstream cid for backend token backfill.
     const persisted: ChatPersistedMessage[] = [
       ...toPersistedMessages(baseHistory),
       { role: "user", content: prompt },
@@ -690,7 +690,7 @@ function ChatPageContent() {
       });
       setActiveId(saved.id);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "会话保存失败";
+      const message = error instanceof Error ? error.message : "Failed to save conversation";
       toast.error(message);
     }
   }, [
@@ -748,7 +748,7 @@ function ChatPageContent() {
           disabled={isStreaming}
         >
           <MessageSquarePlus className="size-4" />
-          <span className="text-[13px]">新建对话</span>
+          <span className="text-[13px]">New Chat</span>
         </Button>
         <div className="hide-scrollbar min-h-0 flex-1 overflow-y-auto rounded-xl border border-border/50 bg-card/40 p-2">
           {isLoadingList && !hasLoaded ? (
@@ -774,7 +774,7 @@ function ChatPageContent() {
                       onClick={() => handleSelect(item.id)}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="truncate">{item.title || "新对话"}</div>
+                        <div className="truncate">{item.title || "New Conversation"}</div>
                         <div
                           className={cn(
                             "mt-0.5 truncate text-[10px]",
@@ -795,7 +795,7 @@ function ChatPageContent() {
                           void handleDelete(item.id);
                         }}
                         disabled={isDeleting}
-                        aria-label="删除对话"
+                        aria-label="Delete conversation"
                       >
                         {isDeleting ? (
                           <LoaderCircle className="size-3.5 animate-spin" />
@@ -821,7 +821,7 @@ function ChatPageContent() {
             disabled={messages.length === 0 && !isStreaming}
           >
             <Plus className="size-4" />
-            <span className="text-[13px]">新建对话</span>
+            <span className="text-[13px]">New Chat</span>
           </Button>
           {conversationId ? (
             <span className="ml-auto truncate font-data text-[10px] text-muted-foreground/70">
@@ -876,9 +876,9 @@ function ChatPageContent() {
                           <ChatThinkingStatus />
                         )
                       ) : message.status === "error" ? (
-                        <span>{message.error || "出错了"}</span>
+                        <span>{message.error || "Error"}</span>
                       ) : (
-                        <span className="text-muted-foreground">（空回复）</span>
+                        <span className="text-muted-foreground">(empty reply)</span>
                       )
                     ) : (
                       <span className="whitespace-pre-wrap break-words">{message.content}</span>
@@ -896,7 +896,7 @@ function ChatPageContent() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="发送消息，或描述你想画的图..."
+            placeholder="Send a message, or describe an image you want to create..."
             rows={1}
             className="hide-scrollbar w-full resize-none bg-transparent px-2 py-2 text-[14px] leading-6 text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
           />
@@ -910,7 +910,7 @@ function ChatPageContent() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={CHAT_ACCOUNT_TYPE_AUTO}>自动</SelectItem>
+                <SelectItem value={CHAT_ACCOUNT_TYPE_AUTO}>Auto</SelectItem>
                 {accountTypes.map((type) => (
                   <SelectItem key={type} value={type}>
                     {formatChatAccountType(type)}
@@ -928,7 +928,7 @@ function ChatPageContent() {
                     forceSwitchAccount && "border-foreground bg-foreground text-background hover:bg-foreground/90 hover:text-background",
                   )}
                   onClick={() => setForceSwitchAccount((prev) => !prev)}
-                  title={forceSwitchAccount ? "下一条已切换到新账号（点击取消）" : "下一条切换到其他账号续聊"}
+                  title={forceSwitchAccount ? "Next message will use a new account (click to cancel)" : "Switch to a different account for next message"}
                   aria-pressed={forceSwitchAccount}
                 >
                   <RefreshCw className="size-4" />
@@ -937,7 +937,7 @@ function ChatPageContent() {
               {isStreaming ? (
                 <Button variant="outline" className="h-9 cursor-pointer rounded-lg px-3" onClick={handleStop}>
                   <StopCircle className="size-4" />
-                  <span className="text-[13px]">停止</span>
+                  <span className="text-[13px]">Stop</span>
                 </Button>
               ) : (
                 <Button
@@ -946,7 +946,7 @@ function ChatPageContent() {
                   disabled={!input.trim()}
                 >
                   <Send className="size-4" />
-                  <span className="text-[13px]">发送</span>
+                  <span className="text-[13px]">Send</span>
                 </Button>
               )}
             </div>

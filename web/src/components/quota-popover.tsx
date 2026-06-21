@@ -36,8 +36,8 @@ function buildRows(identity: AuthIdentity): QuotaRow[] {
   return [
     {
       key: "image_daily",
-      label: "画图日限额",
-      hint: "每日 00:00 自动重置",
+      label: "Image Daily Quota",
+      hint: "Resets daily at 00:00",
       icon: ImageIcon,
       quota: identity.image_daily_quota,
       used: identity.image_daily_used,
@@ -46,8 +46,8 @@ function buildRows(identity: AuthIdentity): QuotaRow[] {
     },
     {
       key: "image_monthly",
-      label: "画图月限额",
-      hint: "每月 1 号 00:00 自动重置",
+      label: "Image Monthly Quota",
+      hint: "Resets on the 1st of each month at 00:00",
       icon: ImageIcon,
       quota: identity.image_monthly_quota,
       used: identity.image_monthly_used,
@@ -56,8 +56,8 @@ function buildRows(identity: AuthIdentity): QuotaRow[] {
     },
     {
       key: "image_total",
-      label: "画图总额度",
-      hint: "永久计数，需管理员手动追加",
+      label: "Image Total Quota",
+      hint: "Permanent counter, requires admin to add more",
       icon: ImageIcon,
       quota: identity.image_total_quota,
       used: identity.image_total_used,
@@ -66,8 +66,8 @@ function buildRows(identity: AuthIdentity): QuotaRow[] {
     },
     {
       key: "chat_daily",
-      label: "对话日限额",
-      hint: "每日 00:00 自动重置",
+      label: "Chat Daily Quota",
+      hint: "Resets daily at 00:00",
       icon: CalendarDays,
       quota: identity.chat_daily_quota,
       used: identity.chat_daily_used,
@@ -76,8 +76,8 @@ function buildRows(identity: AuthIdentity): QuotaRow[] {
     },
     {
       key: "chat_monthly",
-      label: "对话月限额",
-      hint: "每月 1 号 00:00 自动重置",
+      label: "Chat Monthly Quota",
+      hint: "Resets on the 1st of each month at 00:00",
       icon: CalendarClock,
       quota: identity.chat_monthly_quota,
       used: identity.chat_monthly_used,
@@ -86,8 +86,8 @@ function buildRows(identity: AuthIdentity): QuotaRow[] {
     },
     {
       key: "chat_total",
-      label: "对话总额度",
-      hint: "永久计数，需管理员手动追加",
+      label: "Chat Total Quota",
+      hint: "Permanent counter, requires admin to add more",
       icon: MessageSquare,
       quota: identity.chat_total_quota,
       used: identity.chat_total_used,
@@ -115,7 +115,7 @@ export function QuotaPopover() {
       })
       .catch((err) => {
         if (!active) return;
-        setError(err instanceof Error ? err.message : "加载额度失败");
+        setError(err instanceof Error ? err.message : "Failed to load quota");
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -130,8 +130,8 @@ export function QuotaPopover() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label="查看额度使用情况"
-          title="查看额度"
+          aria-label="View quota usage"
+          title="View quota"
           className="grid size-6 cursor-pointer place-items-center rounded-md border border-transparent text-muted-foreground transition hover:border-border/70 hover:bg-card hover:text-foreground"
         >
           <Gauge className="size-3.5" />
@@ -139,9 +139,9 @@ export function QuotaPopover() {
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={8} className="w-[320px] p-0">
         <div className="border-b border-stone-100 px-4 py-3">
-          <div className="text-sm font-semibold text-stone-900">额度使用情况</div>
+          <div className="text-sm font-semibold text-stone-900">Quota Usage</div>
           <p className="mt-0.5 text-xs leading-5 text-stone-500">
-            画图与对话三档额度独立计费，任一档用完会停用对应能力。
+            Image and chat quotas are billed independently across three tiers. Exhausting any tier disables that capability.
           </p>
         </div>
         <div className="px-4 py-3">
@@ -184,15 +184,15 @@ function QuotaItem({ row }: { row: QuotaRow }) {
           {row.unlimited ? (
             <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-1.5 py-0.5 font-data text-[11px] font-medium text-violet-700">
               <InfinityIcon className="size-3" />
-              不限
+              Unlimited
             </span>
           ) : exhausted ? (
             <span className="rounded-md bg-rose-50 px-1.5 py-0.5 font-data text-[11px] font-medium text-rose-700">
-              已用完
+              Exhausted
             </span>
           ) : (
             <span className="font-data tabular-nums text-[12px] font-semibold text-stone-800">
-              剩 {row.remaining}
+              {row.remaining} left
             </span>
           )}
         </div>
@@ -209,12 +209,12 @@ function QuotaItem({ row }: { row: QuotaRow }) {
             />
           </div>
           <div className="mt-1 font-data tabular-nums text-[11px] text-stone-500">
-            已用 {row.used} / {row.quota}
+            Used {row.used} / {row.quota}
           </div>
         </>
       ) : (
         <div className="mt-1.5 font-data tabular-nums text-[11px] text-stone-500">
-          已用 {row.used}
+          Used {row.used}
         </div>
       )}
     </div>

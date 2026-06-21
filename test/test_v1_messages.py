@@ -20,14 +20,14 @@ class AnthropicMessagesTests(unittest.TestCase):
         }
 
     def test_message_http(self):
-        """测试 Anthropic Messages 的非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for Anthropic Messages."""
         response = requests.post(
             f"{BASE_URL}/v1/messages",
             headers=self._headers(),
             json={
                 "model": MODEL,
                 "messages": [
-                    {"role": "user", "content": "你好，请简单介绍一下你自己。"},
+                    {"role": "user", "content": "Hello, please briefly introduce yourself."},
                 ],
             },
             timeout=300,
@@ -41,7 +41,7 @@ class AnthropicMessagesTests(unittest.TestCase):
             print(response.text)
 
     def test_message_stream_http(self):
-        """测试 Anthropic Messages 的流式 HTTP 调用。"""
+        """Test streaming HTTP call for Anthropic Messages."""
         started_at = time.time()
         response = requests.post(
             f"{BASE_URL}/v1/messages",
@@ -50,7 +50,7 @@ class AnthropicMessagesTests(unittest.TestCase):
                 "model": MODEL,
                 "stream": True,
                 "messages": [
-                    {"role": "user", "content": "你好，请简单介绍一下你自己。"},
+                    {"role": "user", "content": "Hello, please briefly introduce yourself."},
                 ],
             },
             stream=True,

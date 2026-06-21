@@ -25,7 +25,7 @@ class ResponsesTests(unittest.TestCase):
             yield text
 
     def test_text_response_http(self):
-        """测试 Responses 文本的非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for Responses text."""
         response = requests.post(
             f"{BASE_URL}/v1/responses",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -35,7 +35,7 @@ class ResponsesTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": "你好，请简单介绍一下你自己。"},
+                            {"type": "input_text", "text": "Hello, please briefly introduce yourself."},
                         ],
                     }
                 ],
@@ -57,7 +57,7 @@ class ResponsesTests(unittest.TestCase):
             raise
 
     def test_text_response_stream_http(self):
-        """测试 Responses 文本的流式 HTTP 调用。"""
+        """Test streaming HTTP call for Responses text."""
         response = requests.post(
             f"{BASE_URL}/v1/responses",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -67,7 +67,7 @@ class ResponsesTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": "你好，请简单介绍一下你自己。"},
+                            {"type": "input_text", "text": "Hello, please briefly introduce yourself."},
                         ],
                     }
                 ],
@@ -104,7 +104,7 @@ class ResponsesTests(unittest.TestCase):
         self.assertIn("response.completed", event_types)
 
     def test_image_response_http(self):
-        """测试 Responses 画图的非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for Responses drawing."""
         response = requests.post(
             f"{BASE_URL}/v1/responses",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -114,7 +114,7 @@ class ResponsesTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": "我想做一张南京城市宣传海报图。"},
+                            {"type": "input_text", "text": "I want to make a promotional poster for Nanjing city."},
                         ],
                     }
                 ],
@@ -143,7 +143,7 @@ class ResponsesTests(unittest.TestCase):
             print(path)
 
     def test_image_response_stream_http(self):
-        """测试 Responses 画图的流式 HTTP 调用。"""
+        """Test streaming HTTP call for Responses drawing."""
         response = requests.post(
             f"{BASE_URL}/v1/responses",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -153,7 +153,7 @@ class ResponsesTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": "我想做一张南京城市宣传海报图。"},
+                            {"type": "input_text", "text": "I want to make a promotional poster for Nanjing city."},
                         ],
                     }
                 ],
@@ -197,7 +197,7 @@ class ResponsesTests(unittest.TestCase):
             print(path)
 
     def test_codex_image_response_http(self):
-        """测试 Responses 的 codex 画图非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for Responses Codex drawing."""
         response = requests.post(
             f"{BASE_URL}/v1/responses",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -207,7 +207,7 @@ class ResponsesTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": "我想做一张南京城市宣传海报图。"},
+                            {"type": "input_text", "text": "I want to make a promotional poster for Nanjing city."},
                         ],
                     }
                 ],
@@ -236,7 +236,7 @@ class ResponsesTests(unittest.TestCase):
             print(path)
 
     def test_codex_image_response_stream_http(self):
-        """测试 Responses 的 codex 画图流式 HTTP 调用。"""
+        """Test streaming HTTP call for Responses Codex drawing."""
         response = requests.post(
             f"{BASE_URL}/v1/responses",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -246,7 +246,7 @@ class ResponsesTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "input_text", "text": "我想做一张南京城市宣传海报图。"},
+                            {"type": "input_text", "text": "I want to make a promotional poster for Nanjing city."},
                         ],
                     }
                 ],

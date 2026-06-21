@@ -87,10 +87,10 @@ _IMAGE_ORDINALS = {
     "第3张": 2,
 }
 
-# 进程内 (upstream_cid -> (account_token, recorded_at))。
-# 用户 stream 完成后立即保存就能命中；进程重启后丢失也只是这一轮失去续聊的"粘住号"，
-# 用户输入下一轮时 chat_service 会重新写入新的 token，可以自然恢复。
-# 1 小时窗口够把 stream→save 的常见间隔覆盖掉，又不至于无限堆。
+# In-process (upstream_cid -> (account_token, recorded_at)).
+# If saved immediately after user stream completion, it hits. Loss after process restart only loses the "sticky account" for this round;
+# when the user inputs in the next round, chat_service will write a new token, enabling natural recovery.
+# A 1-hour window is sufficient to cover common stream -> save intervals without stacking infinitely.
 _TOKEN_CACHE_TTL_SECONDS = 3600
 _token_cache: dict[str, tuple[str, float]] = {}
 _token_cache_lock = threading.Lock()
@@ -335,10 +335,10 @@ def _stream_image(body: ChatStreamRequest, identity: dict[str, Any], policy_payl
             yield _sse({"type": "delta", "text": content})
         if not delivered_any:
             refund_user_quota(identity, 1)
-            message = "图片生成没有返回结果，请检查后端日志或可用画图账号"
+            message = "Image generation returned no results. Please check backend logs or available drawing accounts."
             _log_chat_call(
                 identity,
-                summary="对话生图失败",
+                summary="Chat image generation failed",
                 endpoint="/api/chat/stream",
                 model=selected_model,
                 started=started,
@@ -353,7 +353,7 @@ def _stream_image(body: ChatStreamRequest, identity: dict[str, Any], policy_payl
             record_prompt_for_result(prompt, result_data)
         _log_chat_call(
             identity,
-            summary="对话生图完成",
+            summary="Chat image generation completed",
             endpoint="/api/chat/stream",
             model=selected_model,
             started=started,
@@ -366,7 +366,7 @@ def _stream_image(body: ChatStreamRequest, identity: dict[str, Any], policy_payl
             refund_user_quota(identity, 1)
         _log_chat_call(
             identity,
-            summary="对话生图失败",
+            summary="Chat image generation failed",
             endpoint="/api/chat/stream",
             model=selected_model,
             started=started,
@@ -379,8 +379,8 @@ def _stream_image(body: ChatStreamRequest, identity: dict[str, Any], policy_payl
 
 
 def _resolve_preferred_token(user_id: str, upstream_cid: str) -> str:
-    """续聊'粘住号'：优先查进程内缓存，再落到 chat_conversations 持久化反查。
-    缓存命中率高、读 IO 接近零；持久化兜底覆盖重启 / 跨实例场景。"""
+    """Sticky account for continuation: search in-process cache first, then fall back to chat_conversations persistence query.
+    High cache hit rate, near-zero read IO; persistence fallback covers restart / cross-instance scenarios."""
     if not upstream_cid:
         return ""
     cached = _peek_token(upstream_cid)
@@ -390,12 +390,12 @@ def _resolve_preferred_token(user_id: str, upstream_cid: str) -> str:
 
 
 def _stream(body: ChatStreamRequest, identity: dict[str, Any]) -> Iterator[str]:
-    """把内部 conversation.* 事件薄薄一层映射成 SSE。
-    收尾时无论上游成功失败都异步 DELETE，避免在用户号下留下"临时聊天"痕迹；
-    同时把 (cid, token) 存到 token cache，前端落库时再回填，用于换号续聊。
-    每轮都开新上游 cid，历史靠 messages 全量带回去；这样和 done 后的异步 DELETE
-    不冲突，也避免上游因 parent_message_id 不连续而 404。
-    入口处已经预扣 1 份对话额度；上游真失败（一个字也没吐出来）时退回。"""
+    """Map internal conversation.* events thinly to SSE.
+    Asynchronously DELETE upon termination regardless of upstream success or failure, avoiding leaving 'temporary chat' footprints under user accounts;
+    simultaneously store (cid, token) in the token cache, to be backfilled when the frontend saves to DB, used for continuation across accounts.
+    Open a new upstream cid for each round, sending history fully via messages; this does not conflict with the asynchronous DELETE after done,
+    and avoids upstream 404 due to non-contiguous parent_message_id.
+    One conversation quota is pre-deducted at the entry; refunded if the upstream actually fails (emits no text at all)."""
     user_id = str(identity.get("id") or "")
     request_messages, referenced_image_count = _messages_with_referenced_chat_images(body)
     request_text = _last_user_text(body.messages)
@@ -444,7 +444,7 @@ def _stream(body: ChatStreamRequest, identity: dict[str, Any]) -> Iterator[str]:
             refund_user_chat_quota(identity, 1)
         _log_chat_call(
             identity,
-            summary="对话失败",
+            summary="Chat failed",
             endpoint="/api/chat/stream",
             model=body.model,
             started=started,
@@ -457,7 +457,7 @@ def _stream(body: ChatStreamRequest, identity: dict[str, Any]) -> Iterator[str]:
         if delivered_any and not failed:
             _log_chat_call(
                 identity,
-                summary="对话完成",
+                summary="Chat completed",
                 endpoint="/api/chat/stream",
                 model=body.model,
                 started=started,
@@ -493,8 +493,8 @@ def create_router() -> APIRouter:
             apply_image_account_policy(identity, image_policy_payload)
             consume_user_quota(identity, 1)
             return StreamingResponse(_stream_image(body, identity, image_policy_payload), media_type="text/event-stream")
-        # 入口处预扣 1 份对话额度；任一档（日 / 月 / 总）不足都直接 402。
-        # 上游真失败（一个字未吐出）时由 _stream 内部退回。
+        # Pre-deduct 1 conversation quota at the entry; returns 402 directly if any quota tier (daily/monthly/total) is insufficient.
+        # Refunded internally by _stream if the upstream actually fails (emits no text at all).
         body.account_type = enforce_text_account_policy(identity, body.account_type)
         consume_user_chat_quota(identity, 1)
         return StreamingResponse(_stream(body, identity), media_type="text/event-stream")
@@ -523,7 +523,7 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         upstream_cid = str(body.upstream_conversation_id or "").strip()
-        # 前端拿不到 account_token；就近从 _token_cache 里查回填，给换号续聊用。
+        # Frontend cannot get the account_token; retrieve and backfill from _token_cache for continuation across accounts.
         upstream_token = _peek_token(upstream_cid) if upstream_cid else ""
         record = chat_service.upsert_for_user(
             str(identity.get("id") or ""),

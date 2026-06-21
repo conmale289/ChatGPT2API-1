@@ -38,9 +38,9 @@ import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 
 /**
- * sessionStorage 移交给画图页的 key。
- * 格式：{ url: string; prompt: string }
- * 画图页 mount 时读一次，立刻清掉，避免下次刷新又触发。
+ * sessionStorage key handed off to the image page.
+ * Format: { url: string; prompt: string }
+ * The image page reads it once on mount and clears it immediately to avoid re-triggering on next refresh.
  */
 const REDRAW_HANDOFF_KEY = "chatgpt2api:redraw_handoff";
 
@@ -53,10 +53,10 @@ function formatRelative(value: string) {
   const ts = new Date(value.replace(" ", "T")).getTime();
   if (Number.isNaN(ts)) return value;
   const diff = (Date.now() - ts) / 1000;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`;
+  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} days ago`;
   return value.slice(0, 10);
 }
 
@@ -65,18 +65,18 @@ function WorksPageContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [focused, setFocused] = useState<ManagedImage | null>(null);
 
-  // Pinterest 风格 masonry：列宽 flex-1 边到边等分容器（不留白），列数随容器宽度走。
-  //   - 列数 = round((容器宽 + gap) / (目标列宽 240 + gap))
-  //   - 关键是 round 而不是 floor：floor 必须装满整数列才加新列，
-  //     往往在 N+0.9 列还停在 N 列，单列特别宽 (≈1.7×目标宽)，看起来是大块卡片不是 masonry；
-  //     round 在 N+0.5 列就跳到 N+1 列，单列宽稳定在 [0.7, 1.3]×目标宽，
-  //     跨列数边界时单列宽只变 ~15% (不像断点 25-33% 突变那么硬)
-  //   - 移动端 (<480px) 兜底 2 列，避免单列大图占满屏
-  //   - 列数变化时整体过渡用 CSS transition 软化
-  // ResizeObserver 监听容器，比 window.resize 更准（侧栏开合也响应）；
-  // rAF 节流避免拖动时 setState 高频抖动。
+  // Pinterest-style masonry: column width flex-1 edge-to-edge equal-split container (no whitespace), column count follows container width.
+  //   - Column count = round((container width + gap) / (target column width 240 + gap))
+  //   - Key is round not floor: floor requires filling full integer columns before adding a new one,
+  //     often stays at N columns when at N+0.9, making single columns very wide (~1.7x target width), looking like big cards not masonry;
+  //     round jumps to N+1 columns at N+0.5, keeping single column width stable at [0.7, 1.3]x target width,
+  //     when crossing column count boundary single column width only changes ~15% (not as hard as breakpoint 25-33% sudden change)
+  //   - Mobile (<480px) fallback to 2 columns, avoiding single large image filling the screen
+  //   - Column count change uses CSS transition for smoothing
+  // ResizeObserver watches container, more accurate than window.resize (also responds to sidebar toggle);
+  // rAF throttle avoids high-frequency setState jitter during drag.
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [columnCount, setColumnCount] = useState(0); // 0 = 还没测量
+  const [columnCount, setColumnCount] = useState(0); // 0 = not measured yet
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -106,17 +106,17 @@ function WorksPageContent() {
     };
   }, []);
 
-  // 发布画廊弹窗：当一张图没有 prompt 时（老数据），需要让用户手填后再 publish。
-  // pendingPublish 持有正在发布的目标，promptDraft 是输入框文本。
+  // Publish to gallery dialog: when an image has no prompt (old data), let user fill it in before publishing.
+  // pendingPublish holds the target being published, promptDraft is the input text.
   const [pendingPublish, setPendingPublish] = useState<ManagedImage | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
   const [publishing, setPublishing] = useState(false);
-  // 单图当前发布态视觉反馈：rel → "publishing" | "published"
+  // Single image publish state visual feedback: rel → "publishing" | "published"
   const [publishStates, setPublishStates] = useState<Map<string, "publishing" | "published">>(
     () => new Map(),
   );
 
-  // 删除二次确认
+  // Delete confirmation
   const [pendingDelete, setPendingDelete] = useState<ManagedImage | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -125,9 +125,9 @@ function WorksPageContent() {
     try {
       const resp = await fetchMyWorks();
       setItems(resp.items);
-      // 播种 publishStates：刷新页面后 publishStates Map 会被重置为空，
-      // 已发布角标会丢。reload 时一次性问后端"这批 rel 我发过哪些"，
-      // 把命中的写回 state，避免逐张发单条 /api/gallery/published 撑爆并发数。
+      // Seed publishStates: after page refresh the publishStates Map resets to empty,
+      // published badges would be lost. On reload, batch-query the backend for "which of these rels have I published",
+      // write matches back to state, avoiding per-image single /api/gallery/published requests overwhelming concurrency.
       const rels = resp.items.map((it) => it.rel).filter(Boolean) as string[];
       if (rels.length > 0) {
         try {
@@ -142,11 +142,11 @@ function WorksPageContent() {
             return next;
           });
         } catch {
-          // 静默失败：拉不到发布状态不阻塞列表加载，下次 reload 再试
+          // Silent failure: unable to fetch publish status doesn't block list loading, retry on next reload
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "加载作品失败";
+      const message = error instanceof Error ? error.message : "Failed to load works";
       toast.error(message);
     } finally {
       setIsLoading(false);
@@ -158,11 +158,11 @@ function WorksPageContent() {
   }, [reload]);
 
   /**
-   * 用此图重画：把 rel + prompt 写进 sessionStorage，跳到画图页。
-   * 故意传 rel 不传 item.url：后端拼的 item.url 是绝对地址（含 http://...:port），
-   * 跟前端页面跨源时 <img> 能加载、fetch 会被 CORS 拦掉报 "Failed to fetch"。
-   * 画图页拿到 rel 后用 `/images/${rel}` 同源拉取，永远不会撞 CORS。
-   * url 字段保留作为兜底（rel 缺失时的老 handoff 格式）。
+   * Redraw with this image: write rel + prompt to sessionStorage, navigate to image page.
+   * Intentionally pass rel not item.url: the backend-constructed item.url is an absolute address (with http://...:port),
+   * which is cross-origin with the frontend page — <img> can load it but fetch gets blocked by CORS reporting "Failed to fetch".
+   * The image page uses `/images/${rel}` same-origin fetch with the rel, never hitting CORS.
+   * The url field is kept as fallback (old handoff format when rel is missing).
    */
   const handleRedraw = useCallback((item: ManagedImage) => {
     if (typeof window === "undefined") return;
@@ -172,64 +172,64 @@ function WorksPageContent() {
         REDRAW_HANDOFF_KEY,
         JSON.stringify({
           rel,
-          url: item.url, // 兜底：rel 没拿到时用绝对地址
+          url: item.url, // fallback: use absolute URL when rel is unavailable
           prompt: item.prompt || "",
         }),
       );
     } catch {
-      // sessionStorage 写失败一般是隐私模式 / 配额满，不阻断跳转
+      // sessionStorage write failure is typically private mode / quota full, don't block navigation
     }
     window.location.assign("/image");
   }, []);
 
   const handleCopyPrompt = useCallback(async (text: string) => {
     if (!text.trim()) {
-      toast.error("此图没有保留 prompt");
+      toast.error("No prompt saved for this image");
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
-      toast.success("已复制 prompt");
+      toast.success("Prompt copied");
     } catch {
-      toast.error("复制失败");
+      toast.error("Copy failed");
     }
   }, []);
 
   const handleDownload = useCallback(async (item: ManagedImage) => {
     const path = item.rel || item.path;
     if (!path) {
-      toast.error("当前图片无法下载");
+      toast.error("This image cannot be downloaded");
       return;
     }
     try {
       await downloadSingleImage(path);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "下载失败";
+      const message = error instanceof Error ? error.message : "Download failed";
       toast.error(message);
     }
   }, []);
 
   /**
-   * 发布按钮入口。
-   *  - 已有 prompt：直接走 publish 接口，过敏感词 → 成功 → 给绿对勾视觉
-   *  - 没有 prompt：弹个对话框让用户手填，提交时再走 publish
+   * Publish button entry point.
+   *  - Has prompt: directly call publish API, pass content filter → success → show green check visual
+   *  - No prompt: show dialog for user to fill in, then call publish on submit
    */
   const handlePublish = useCallback(
     async (item: ManagedImage, promptOverride?: string) => {
       const rel = item.rel || item.path;
       if (!rel) {
-        toast.error("当前图片无法发布");
+        toast.error("This image cannot be published");
         return;
       }
-      // promptOverride !== undefined 表示用户已通过补齐弹窗确认（即便是空串），
-      // 此时尊重用户选择直接发布；undefined 表示从卡片入口直接点的发布按钮。
+      // promptOverride !== undefined means user has confirmed via the fill-in dialog (even if empty string),
+      // respect user's choice and publish directly; undefined means clicked publish button directly from card.
       let prompt: string;
       if (promptOverride !== undefined) {
         prompt = promptOverride.trim();
       } else {
         prompt = (item.prompt ?? "").trim();
         if (!prompt) {
-          // 卡片自身没 prompt → 弹窗让用户决定加不加（可选，留空也能发）
+          // Card itself has no prompt → show dialog for user to decide whether to add one (optional, can publish empty)
           setPendingPublish(item);
           setPromptDraft("");
           return;
@@ -246,15 +246,15 @@ function WorksPageContent() {
           height: item.height || 0,
         });
         setPublishStates((prev) => new Map(prev).set(rel, "published"));
-        toast.success("已发布到画廊");
+        toast.success("Published to gallery");
       } catch (error) {
-        // 失败回滚状态让用户可重试
+        // Rollback state on failure so user can retry
         setPublishStates((prev) => {
           const next = new Map(prev);
           next.delete(rel);
           return next;
         });
-        const message = error instanceof Error ? error.message : "发布失败";
+        const message = error instanceof Error ? error.message : "Publish failed";
         toast.error(message);
       }
     },
@@ -263,7 +263,7 @@ function WorksPageContent() {
 
   const handleConfirmPendingPublish = useCallback(async () => {
     if (!pendingPublish) return;
-    // 允许空 prompt——是否补齐由用户决定，后端已支持空值发布
+    // Allow empty prompt — whether to fill in is the user's decision, backend supports empty value publishing
     const text = promptDraft.trim();
     setPublishing(true);
     try {
@@ -286,16 +286,16 @@ function WorksPageContent() {
     try {
       const resp = await deleteManagedImages({ paths: [path] });
       if (!resp.removed) {
-        toast.error("删除失败：该图不在你名下或已不存在");
+        toast.error("Delete failed: this image is not under your account or no longer exists");
       } else {
-        toast.success("已删除");
+        toast.success("Deleted");
         const key = imageKey(pendingDelete);
         setItems((prev) => prev.filter((it) => imageKey(it) !== key));
         if (focused && imageKey(focused) === key) setFocused(null);
       }
       setPendingDelete(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "删除失败";
+      const message = error instanceof Error ? error.message : "Delete failed";
       toast.error(message);
     } finally {
       setDeleting(false);
@@ -304,10 +304,10 @@ function WorksPageContent() {
 
   const visibleCount = items.length;
 
-  // 关闭弹窗时，focused 立刻置 null 会让 {focused ? ... : null} 内容瞬间从 DOM 消失，
-  // 剩下空的 DialogContent 在 Radix 200ms 淡出缩放里收缩成一条白线（用户反馈的"中间闪白线"）。
-  // 用 lastFocused 缓存最后一次的内容，关闭过渡跑完前继续渲染同一份图片/按钮，
-  // 整块跟着外壳一起淡出，不会先空掉。
+  // When closing the dialog, setting focused to null immediately causes {focused ? ... : null} content to disappear from DOM instantly,
+  // leaving an empty DialogContent that shrinks into a white line in the center during Radix's 200ms fade-out animation (user-reported "white line flash in the middle").
+  // Use lastFocused to cache the last content, continue rendering the same image/buttons before close transition completes,
+  // so the whole block fades out together with the shell, instead of emptying first.
   const [lastFocused, setLastFocused] = useState<ManagedImage | null>(null);
   useEffect(() => {
     if (focused) setLastFocused(focused);
@@ -323,13 +323,13 @@ function WorksPageContent() {
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">
             My Works
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">我的作品</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">My Works</h1>
           <p className="text-sm text-muted-foreground">
             {isLoading
-              ? "正在加载…"
+              ? "Loading…"
               : visibleCount === 0
-                ? "还没有生成过图片"
-                : `共 ${visibleCount} 张 · 点击卡片查看大图`}
+                ? "No images generated yet"
+                : `${visibleCount} images · Click a card to view full size`}
           </p>
         </div>
 
@@ -341,7 +341,7 @@ function WorksPageContent() {
             disabled={isLoading}
           >
             <RefreshCw className={cn("size-4", isLoading && "animate-spin")} />
-            刷新
+            Refresh
           </Button>
         </div>
       </section>
@@ -352,7 +352,7 @@ function WorksPageContent() {
             <div className="rounded-xl bg-stone-100 p-3 text-stone-500">
               <LoaderCircle className="size-5 animate-spin" />
             </div>
-            <p className="text-sm text-stone-500">从云端拉取你的图片…</p>
+            <p className="text-sm text-stone-500">Fetching your images from cloud…</p>
           </CardContent>
         </Card>
       ) : null}
@@ -364,8 +364,8 @@ function WorksPageContent() {
               <Images className="size-5" />
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium text-stone-700">这里还很空</p>
-              <p className="text-sm text-stone-500">去画图页生成第一张吧</p>
+              <p className="text-sm font-medium text-stone-700">Nothing here yet</p>
+              <p className="text-sm text-stone-500">Go to the image page to generate your first one</p>
             </div>
             <Button
               variant="outline"
@@ -373,18 +373,18 @@ function WorksPageContent() {
               onClick={() => window.location.assign("/image")}
             >
               <Sparkles className="size-4" />
-              去画图
+              Generate
             </Button>
           </CardContent>
         </Card>
       ) : null}
 
-      {/* Pinterest 风格 masonry：列宽 flex-1 边到边等分容器，不留白。
-          - 列数变化时单列宽只变 ~15%，比固定列宽的"侧边留白突变"更柔和
-          - 列内"最短列优先"分桶，矮卡紧贴下一张
-          - columnCount === 0 表示还没测量，先不渲染避免 SSR/CSR 不一致闪烁
-          - 卡片去掉边框/默认 overlay，让图片本身说话；prompt + 时间只在 hover 时浮现
-          - 不依赖图片真实高度，只按 aspectRatio 估"列内累计高度"分桶
+      {/* Pinterest-style masonry: column width flex-1 edge-to-edge equal-split container, no whitespace.
+          - Column count change only shifts single column width ~15%, softer than fixed-width "side whitespace sudden change"
+          - "Shortest column first" bucketing within columns, short cards stack tightly
+          - columnCount === 0 means not measured yet, don't render to avoid SSR/CSR inconsistency flicker
+          - Cards remove border/default overlay, let the image itself speak; prompt + time only appear on hover
+          - Don't depend on real image height, only use aspectRatio to estimate "cumulative height in column" for bucketing
         */}
       <div
         ref={containerRef}
@@ -394,13 +394,13 @@ function WorksPageContent() {
         {columnCount > 0 && (() => {
           const cols = columnCount;
           const buckets: ManagedImage[][] = Array.from({ length: cols }, () => []);
-          // 列内累计"高度"近似值：用 1/ratio (= height/width) 做单位列宽下的相对高度
+          // Cumulative "height" approximation within column: use 1/ratio (= height/width) as relative height per unit column width
           const heights = new Array(cols).fill(0);
           for (const item of items) {
             const w = item.width && item.width > 0 ? item.width : 1;
             const h = item.height && item.height > 0 ? item.height : 1;
             const relativeH = h / w;
-            // 选当前最短列
+            // Pick the current shortest column
             let target = 0;
             for (let i = 1; i < cols; i++) {
               if (heights[i] < heights[target]) target = i;
@@ -437,10 +437,10 @@ function WorksPageContent() {
                     />
                     {state === "published" ? (
                       <div className="absolute top-2 left-2 rounded-md bg-emerald-500/95 px-2 py-1 text-[10.5px] font-semibold text-white shadow-sm">
-                        已发布
+                        Published
                       </div>
                     ) : null}
-                    {/* Pinterest 风格：默认干净纯图，hover 才浮现 prompt + 元信息 */}
+                    {/* Pinterest style: clean image by default, prompt + meta only appear on hover */}
                     <div className="pointer-events-none absolute right-0 bottom-0 left-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">
                       <p className="line-clamp-2 text-[12.5px] leading-snug">
                         {item.prompt?.trim() || "—"}
@@ -462,7 +462,7 @@ function WorksPageContent() {
         })()}
       </div>
 
-      {/* 详情 Dialog */}
+      {/* Detail Dialog */}
       <Dialog open={focused !== null} onOpenChange={(open) => (!open ? setFocused(null) : null)}>
         <DialogContent
           showCloseButton={false}
@@ -470,10 +470,10 @@ function WorksPageContent() {
         >
           {focusedView ? (
             <div className="flex flex-col">
-              {/* 图片 + 右上悬浮操作（关闭/下载/删除）。
-                  把次要操作收到角落，底部只留 3 个主 CTA，避免按钮换行。
-                  容器底色用 stone-900 兜底；图按容器宽度撑满，高度按比例自然展开，
-                  高图由外层 DialogContent 的 max-h-[92vh] + overflow-y-auto 消化滚动。 */}
+              {/* Image + top-right floating actions (close/download/delete).
+                  Secondary actions tucked in corner, bottom only has 3 main CTAs, avoiding button wrapping.
+                  Container background uses stone-900 as fallback; image fills container width, height expands naturally by ratio,
+                  tall images handled by outer DialogContent's max-h-[92vh] + overflow-y-auto scroll. */}
               <div className="relative bg-stone-900">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -485,8 +485,8 @@ function WorksPageContent() {
                   <button
                     type="button"
                     onClick={() => void handleDownload(focusedView)}
-                    aria-label="下载"
-                    title="下载"
+                    aria-label="Download"
+                    title="Download"
                     className="grid size-9 cursor-pointer place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm transition hover:bg-black/75"
                   >
                     <Download className="size-4" />
@@ -494,8 +494,8 @@ function WorksPageContent() {
                   <button
                     type="button"
                     onClick={() => setPendingDelete(focusedView)}
-                    aria-label="删除"
-                    title="删除"
+                    aria-label="Delete"
+                    title="Delete"
                     className="grid size-9 cursor-pointer place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm transition hover:bg-rose-600"
                   >
                     <Trash2 className="size-4" />
@@ -503,8 +503,8 @@ function WorksPageContent() {
                   <button
                     type="button"
                     onClick={() => setFocused(null)}
-                    aria-label="关闭"
-                    title="关闭"
+                    aria-label="Close"
+                    title="Close"
                     className="grid size-9 cursor-pointer place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm transition hover:bg-black/75"
                   >
                     <X className="size-4" />
@@ -513,8 +513,8 @@ function WorksPageContent() {
               </div>
               <div className="flex flex-col gap-3 p-5">
                 <DialogHeader className="gap-1.5 space-y-0">
-                  <DialogTitle className="text-base font-semibold">作品详情</DialogTitle>
-                  <DialogDescription className="sr-only">单张作品的 prompt 与操作</DialogDescription>
+                  <DialogTitle className="text-base font-semibold">Work Details</DialogTitle>
+                  <DialogDescription className="sr-only">Prompt and actions for a single work</DialogDescription>
                 </DialogHeader>
 
                 {focusedView.prompt ? (
@@ -523,7 +523,7 @@ function WorksPageContent() {
                   </div>
                 ) : (
                   <div className="rounded-xl border border-dashed border-stone-200 bg-stone-50/70 p-3 text-[12px] leading-6 text-stone-500">
-                    此图未保留生成时的 prompt（可能是早期版本生成的）。发布到画廊时会让你手填。
+                    No prompt was saved for this image (likely generated by an earlier version). You can add one when publishing to the gallery.
                   </div>
                 )}
 
@@ -536,15 +536,15 @@ function WorksPageContent() {
                   ) : null}
                 </div>
 
-                {/* 底部 3 主 CTA 等分宽度，永远不换行；
-                    下载/删除已移到图片右上角悬浮按钮。 */}
+                {/* Bottom 3 main CTAs equally split width, never wrap;
+                    download/delete already moved to top-right floating buttons on image. */}
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   <Button
                     onClick={() => handleRedraw(focusedView)}
                     className="h-10 w-full rounded-xl bg-stone-950 px-3 text-white hover:bg-stone-800"
                   >
                     <Sparkles className="size-4" />
-                    用此图重画
+                    Redraw
                   </Button>
                   <Button
                     variant="outline"
@@ -553,7 +553,7 @@ function WorksPageContent() {
                     disabled={!focusedView.prompt}
                   >
                     <Copy className="size-4" />
-                    复制 prompt
+                    Copy Prompt
                   </Button>
                   <Button
                     variant="outline"
@@ -566,7 +566,7 @@ function WorksPageContent() {
                     ) : (
                       <Share2 className="size-4" />
                     )}
-                    {focusedPublishState === "published" ? "已发布" : "发布到画廊"}
+                    {focusedPublishState === "published" ? "Published" : "Publish to Gallery"}
                   </Button>
                 </div>
               </div>
@@ -575,7 +575,7 @@ function WorksPageContent() {
         </DialogContent>
       </Dialog>
 
-      {/* 老数据 / 图生图无 prompt 的图发布前选择性补段描述（可选，留空也能发） */}
+      {/* Old data / img2img without prompt — optionally add a description before publishing (optional, can publish empty) */}
       <Dialog
         open={pendingPublish !== null}
         onOpenChange={(open) => {
@@ -587,15 +587,15 @@ function WorksPageContent() {
       >
         <DialogContent showCloseButton={false} className="rounded-2xl p-6">
           <DialogHeader>
-            <DialogTitle>给这张图加段 prompt（可选）</DialogTitle>
+            <DialogTitle>Add a prompt for this image (optional)</DialogTitle>
             <DialogDescription className="text-sm leading-6">
-              此图没有保留生成时的 prompt。补一段描述能让其他用户复用提示词，留空也可直接发布。
+              No prompt was saved for this image. Adding a description helps other users reuse the prompt, but you can also publish without one.
             </DialogDescription>
           </DialogHeader>
           <Textarea
             value={promptDraft}
             onChange={(event) => setPromptDraft(event.target.value)}
-            placeholder="比如：一只穿宇航服的猫，蹲在月球表面"
+            placeholder="e.g.: A cat in a spacesuit sitting on the moon's surface"
             className="mt-2 min-h-[120px] rounded-xl"
           />
           <DialogFooter className="mt-2">
@@ -607,7 +607,7 @@ function WorksPageContent() {
               }}
               disabled={publishing}
             >
-              取消
+              Cancel
             </Button>
             <Button
               className="bg-stone-950 text-white hover:bg-stone-800"
@@ -615,27 +615,27 @@ function WorksPageContent() {
               disabled={publishing}
             >
               {publishing ? <LoaderCircle className="size-4 animate-spin" /> : null}
-              确认发布
+              Confirm Publish
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 删除二次确认 */}
+      {/* Delete confirmation */}
       <Dialog
         open={pendingDelete !== null}
         onOpenChange={(open) => (!open ? setPendingDelete(null) : null)}
       >
         <DialogContent showCloseButton={false} className="rounded-2xl p-6">
           <DialogHeader>
-            <DialogTitle>删除这张作品？</DialogTitle>
+            <DialogTitle>Delete this work?</DialogTitle>
             <DialogDescription className="text-sm leading-6">
-              服务器上的图片会一起被删除，画廊里发布过的对应条目也会被移除，已下载到本地的不受影响。
+              The image on the server will be deleted, and any corresponding gallery entry will also be removed. Locally downloaded copies are not affected.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPendingDelete(null)} disabled={deleting}>
-              取消
+              Cancel
             </Button>
             <Button
               className="bg-rose-600 text-white hover:bg-rose-700"
@@ -643,7 +643,7 @@ function WorksPageContent() {
               disabled={deleting}
             >
               {deleting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-              确认删除
+              Confirm Delete
             </Button>
           </DialogFooter>
         </DialogContent>

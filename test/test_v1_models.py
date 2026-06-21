@@ -14,13 +14,13 @@ BASE_URL = "http://localhost:8000"
 
 class ModelListTests(unittest.TestCase):
     def test_list_models_function(self):
-        """测试直接调用服务层获取模型列表。"""
+        """Test direct invocation of service layer to obtain model list."""
         result = openai_v1_models.list_models()
         print("function result:")
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
     def test_list_models_http(self):
-        """测试通过 HTTP 接口获取模型列表。"""
+        """Test obtaining model list via HTTP interface."""
         response = requests.get(
             f"{BASE_URL}/v1/models",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},

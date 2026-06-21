@@ -1,10 +1,10 @@
-# 上游 Conversation SSE 协议说明
+# Upstream Conversation SSE Protocol Specification
 
-Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:` 通常是一段 JSON payload，也可能是协议标记或结束标记。客户端需要按顺序消费这些 payload，维护当前会话状态、文本内容、工具调用状态和图片结果指针。
+Conversation SSE is the streaming response protocol for upstream conversation links. Each SSE `data:` line is typically a JSON payload, but can also be a protocol marker or end marker. Clients need to consume these payloads in order to maintain the current session state, text content, tool invocation state, and image result pointers.
 
-## 基本形态
+## Basic Structure
 
-常见 payload 示例：
+Common payload examples:
 
 ```text
 "v1"
@@ -16,39 +16,39 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
 [DONE]
 ```
 
-处理建议：
+Handling suggestions:
 
-| payload | 含义 | 处理方式 |
+| Payload | Meaning | Handling Method |
 |:--|:--|:--|
-| `"v1"` | 协议版本标记 | 可记录，通常不影响业务 |
-| `[DONE]` | 当前 SSE 流结束 | 停止继续读取 |
-| JSON object | 事件、消息或 patch | 按字段更新会话状态 |
-| JSON string | 短文本 patch 或协议标记 | 结合上下文处理 |
-| 非 JSON 内容 | 原始内容 | 保留为 raw 事件，避免中断流 |
+| `"v1"` | Protocol version marker | Can be logged, usually doesn't affect business logic |
+| `[DONE]` | End of current SSE stream | Stop reading |
+| JSON object | Event, message, or patch | Update conversation state by fields |
+| JSON string | Short text patch or protocol marker | Process in context |
+| Non-JSON content | Original content | Keep as raw event to avoid breaking the stream |
 
-## 常用字段
+## Common Fields
 
-| 字段 | 说明 |
+| Field | Description |
 |:--|:--|
-| `type` | 上游事件类型，如 `resume_conversation_token`、`input_message`、`message_marker`、`title_generation`、`server_ste_metadata` |
-| `conversation_id` | 当前会话 ID，可从多个事件中获得 |
-| `p` | patch 路径，例如 `/message/content/parts/0` |
-| `o` | patch 操作，例如 `add`、`append`、`replace`、`patch` |
-| `v` | patch 值，可能是字符串、数组，也可能包含完整 message |
-| `c` | 消息序号或游标，常见于 add 类事件 |
-| `message.id` | 消息 ID |
-| `message.author.role` | 消息角色，常见 `system`、`user`、`assistant`、`tool` |
-| `message.content.content_type` | 内容类型，如 `text`、`multimodal_text`、`model_editable_context` |
-| `message.content.parts` | 内容片段，可能包含文本、图片指针或多模态对象 |
-| `message.status` | 消息状态，如 `in_progress`、`finished_successfully` |
-| `message.end_turn` | 是否结束当前轮次 |
-| `metadata.tool_invoked` | 本轮是否调用工具 |
-| `metadata.turn_use_case` | 本轮用途，如 `text`、`multimodal` |
-| `metadata.async_task_type` | 异步工具任务类型，图片生成通常为 `image_gen` |
+| `type` | Upstream event type, e.g., `resume_conversation_token`, `input_message`, `message_marker`, `title_generation`, `server_ste_metadata` |
+| `conversation_id` | Current conversation ID, available from multiple events |
+| `p` | Patch path, e.g., `/message/content/parts/0` |
+| `o` | Patch operation, e.g., `add`, `append`, `replace`, `patch` |
+| `v` | Patch value, can be a string, array, or contain a complete message object |
+| `c` | Message index or cursor, common in add events |
+| `message.id` | Message ID |
+| `message.author.role` | Message role, common values: `system`, `user`, `assistant`, `tool` |
+| `message.content.content_type` | Content type, e.g., `text`, `multimodal_text`, `model_editable_context` |
+| `message.content.parts` | Content parts, can contain text, image pointers, or multimodal objects |
+| `message.status` | Message status, e.g., `in_progress`, `finished_successfully` |
+| `message.end_turn` | Whether this ends the current turn |
+| `metadata.tool_invoked` | Whether a tool was invoked in this turn |
+| `metadata.turn_use_case` | Turn use case, e.g., `text`, `multimodal` |
+| `metadata.async_task_type` | Async tool task type, typically `image_gen` for image generation |
 
-## 会话启动事件
+## Session Start Event
 
-上游通常会先返回恢复令牌或会话令牌：
+The upstream typically returns a resume token or conversation token first:
 
 ```json
 {
@@ -59,11 +59,11 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
 }
 ```
 
-这个事件主要用于标识会话和恢复上下文。业务层通常只需要保存 `conversation_id`，`token` 不应该暴露给下游用户。
+This event is primarily used to identify the conversation and restore context. The business layer usually only needs to save the `conversation_id`; the `token` should not be exposed to downstream users.
 
-## 消息 add 场景
+## Message Add Scenario
 
-完整消息可能通过 `add` 或带 `v.message` 的事件出现：
+A complete message can appear via `add` or events containing `v.message`:
 
 ```json
 {
@@ -81,11 +81,11 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
 }
 ```
 
-此类事件常用于创建一条新消息。若消息角色为 `assistant`，后续文本通常会通过 patch 继续追加。
+Such events are commonly used to create a new message. If the message role is `assistant`, subsequent text is usually appended via patches.
 
-## 文本增量场景
+## Text Incremental Scenario
 
-文本输出通常由多条 patch 组成：
+Text output usually consists of multiple patches:
 
 ```json
 {"p":"/message/content/parts/0","o":"append","v":"Hello"}
@@ -97,18 +97,18 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
 ]}
 ```
 
-处理要点：
+Handling points:
 
-| 形态 | 含义 |
+| Pattern | Meaning |
 |:--|:--|
-| `p == "/message/content/parts/0"` 且 `o == "append"` | 向当前文本追加内容 |
-| `o == "replace"` | 用新值替换目标字段 |
-| `o == "patch"` 且 `v` 是数组 | 批量 patch，需要按数组顺序处理 |
-| 只有 `v` 且 `v` 是字符串 | 可能是省略路径的文本增量，应结合当前文本流处理 |
+| `p == "/message/content/parts/0"` and `o == "append"` | Append content to current text |
+| `o == "replace"` | Replace target field with new value |
+| `o == "patch"` and `v` is an array | Batch patches, must be processed in array order |
+| Only `v` and `v` is a string | Likely a text increment omitting the path, should be processed within the current text stream |
 
-## 输入消息场景
+## Input Message Scenario
 
-用户输入会以 `input_message` 或普通 `user` message 出现。图片编辑请求会包含用户上传的参考图：
+User input appears as `input_message` or a normal `user` message. Image edit requests contain user-uploaded reference images:
 
 ```json
 {
@@ -119,7 +119,7 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
       "content_type": "multimodal_text",
       "parts": [
         {"asset_pointer": "sediment://file_input"},
-        "编辑提示词"
+        "Edit prompt"
       ]
     }
   },
@@ -127,11 +127,11 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
 }
 ```
 
-这类 `sediment://...` 表示输入附件，不是生成结果。即使它可以被下载，也不能当作输出图片返回。
+This type of `sediment://...` indicates an input attachment, not a generation result. Even if it can be downloaded, it should not be returned as an output image.
 
-## 图片工具成功场景
+## Image Tool Success Scenario
 
-图片生成或图片编辑成功时，上游一般会出现工具消息：
+When image generation or editing succeeds, a tool message typically appears from upstream:
 
 ```json
 {
@@ -152,33 +152,33 @@ Conversation SSE 是上游对话链路的流式返回协议。每条 SSE `data:`
 }
 ```
 
-只有同时满足以下条件的图片指针，才应该视为输出结果：
+An image pointer should only be treated as an output result if it simultaneously satisfies all of the following conditions:
 
-| 条件 | 说明 |
+| Condition | Description |
 |:--|:--|
-| `message.author.role == "tool"` | 来源是工具消息 |
-| `metadata.async_task_type == "image_gen"` | 工具任务是图片生成 |
-| `asset_pointer` 为 `file-service://...` 或 `sediment://...` | 指向可解析图片资源 |
+| `message.author.role == "tool"` | Source is a tool message |
+| `metadata.async_task_type == "image_gen"` | Tool task is image generation |
+| `asset_pointer` is `file-service://...` or `sediment://...` | Points to a resolvable image resource |
 
-## 图片指针类型
+## Image Pointer Types
 
-| 指针 | 常见来源 | 说明 |
+| Pointer | Common Source | Description |
 |:--|:--|:--|
-| `file-service://file_xxx` | 图片工具输出 | 可通过文件下载接口解析 |
-| `sediment://file_xxx` | 输入附件或图片工具输出 | 需要结合消息角色判断来源 |
-| `file_upload` | 上传过程占位 | 通常不应作为输出 |
+| `file-service://file_xxx` | Image tool output | Can be resolved via file download endpoint |
+| `sediment://file_xxx` | Input attachment or image tool output | Source must be determined in combination with message role |
+| `file_upload` | Upload placeholder | Usually should not be treated as output |
 
-不要只凭字符串里出现 `file_` 或 `sediment://` 就判定为输出图。必须结合消息角色和任务类型。
+Do not determine it as an output image solely based on the presence of "file_" or "sediment://" in the string. You must combine this with message role and task type.
 
-## 策略拒绝场景
+## Policy Rejection Scenario
 
-当上游拒绝请求时，通常不会产生图片工具消息，而是返回普通 assistant 文本：
+When upstream rejects the request, no image tool message is generated; instead, a normal assistant text is returned:
 
 ```text
 I can't assist with that request. If you have another type of modification...
 ```
 
-常见伴随事件：
+Common accompanying events:
 
 ```json
 {"type":"title_generation","title":"Request Denied","conversation_id":"..."}
@@ -196,18 +196,18 @@ I can't assist with that request. If you have another type of modification...
 }
 ```
 
-处理要点：
+Handling points:
 
-| 条件 | 行为 |
+| Condition | Action |
 |:--|:--|
-| 有 assistant 拒绝文本 | 应返回文本消息 |
-| `tool_invoked == false` | 说明没有实际工具结果 |
-| 没有 `role=tool` 且 `async_task_type=image_gen` 的消息 | 不应收集输出图片 |
-| 用户输入消息里有图片指针 | 仍然只视为输入附件 |
+| Assistant rejection text present | Should return text message |
+| `tool_invoked == false` | Indicates no actual tool results |
+| No message with role=tool and async_task_type=image_gen | Output images should not be collected |
+| Image pointer in user input message | Still treated only as input attachment |
 
-## moderation 场景
+## Moderation Scenario
 
-部分请求可能返回 moderation 事件：
+Some requests may return moderation events:
 
 ```json
 {
@@ -219,11 +219,11 @@ I can't assist with that request. If you have another type of modification...
 }
 ```
 
-若 `blocked == true`，应认为本轮被策略拦截。后续如有 assistant 文本，应优先返回该文本；若没有文本，可返回合适的错误信息。
+If `blocked == true`, it should be considered blocked by policy. If there is subsequent assistant text, that text should be returned with priority; if there is no text, an appropriate error message can be returned.
 
-## marker 和 title 事件
+## Marker and Title Events
 
-上游会返回一些辅助事件：
+Upstream returns some auxiliary events:
 
 ```json
 {"type":"message_marker","marker":"user_visible_token","event":"first"}
@@ -231,11 +231,11 @@ I can't assist with that request. If you have another type of modification...
 {"type":"title_generation","title":"...","conversation_id":"..."}
 ```
 
-这些事件通常用于前端展示、标题生成或流式状态标记，不代表实际文本内容或图片结果。
+These events are typically used for frontend display, title generation, or streaming state markers, and do not represent actual text content or image results.
 
-## metadata 事件
+## Metadata Event
 
-`server_ste_metadata` 用于描述本轮调度和工具状态：
+`server_ste_metadata` describes this turn's scheduling and tool state:
 
 ```json
 {
@@ -249,37 +249,37 @@ I can't assist with that request. If you have another type of modification...
 }
 ```
 
-常用判断：
+Common checks:
 
-| 字段 | 说明 |
+| Field | Description |
 |:--|:--|
-| `tool_invoked == true` | 上游认为本轮调用过工具 |
-| `tool_invoked == false` | 上游未调用工具，常见于拒绝或纯文本响应 |
-| `turn_use_case == "text"` | 按文本响应处理 |
-| `turn_use_case == "multimodal"` | 多模态请求，不代表一定有图片输出 |
-| `did_prompt_contain_image == true` | 输入包含图片，不代表输出包含图片 |
+| `tool_invoked == true` | Upstream determined a tool was invoked this turn |
+| `tool_invoked == false` | Upstream did not invoke any tool, common in rejections or plaintext responses |
+| `turn_use_case == "text"` | Process as text response |
+| `turn_use_case == "multimodal"` | Multimodal request, does not guarantee image output |
+| `did_prompt_contain_image == true` | Input contains images, does not guarantee output contains images |
 
-## 结束后的结果判断
+## Result Judgment After Ending
 
-SSE 结束后可按以下顺序判断结果：
+After the SSE stream ends, results can be judged in the following order:
 
-1. 如果已经收集到图片工具输出指针，解析并下载输出图片。
-2. 如果没有输出图片指针，但有 assistant 文本，并且本轮被拦截或未调用工具，返回文本消息。
-3. 如果没有输出图片指针，但有 `conversation_id`，可查询完整会话明细，继续寻找图片工具输出。
-4. 查询完整会话时，仍然只读取 `role=tool` 且 `async_task_type=image_gen` 的消息。
-5. 如果没有图片结果也没有文本，返回上游异常或空结果错误。
+1. If image tool output pointers have been collected, resolve and download the output images.
+2. If there are no output image pointers but assistant text is present, and this turn was blocked or no tool was invoked, return a text message.
+3. If there are no output image pointers but conversation_id is present, the complete conversation details can be queried to continue searching for image tool outputs.
+4. When querying complete conversation details, still read only messages with role=tool and async_task_type=image_gen.
+5. If there is neither an image result nor text, return an upstream exception or empty result error.
 
-## 私有区(PUA)标注清洗
+## Private Use Area (PUA) Cleanup
 
-上游正文里会嵌入用 U+E200..U+E203 包裹的内部标注，浏览器 UI 渲染成卡片或脚注，但作为 OpenAI 兼容 API 透传时这些字符不可见，留下的就是 `entity[...]`、`citeturn0search0` 这样的乱码。所有清洗集中在 `services/protocol/chatgpt_markup.py`，由 `iter_conversation_payloads` 在中央枢纽调用，chat completions / responses / anthropic / `/api/chat/stream` 各协议统一受益。
+Upstream body text may contain embedded internal markup wrapped in U+E200..U+E203. While the browser UI renders these as cards or footnotes, they are invisible when passed through the OpenAI-compatible API, leaving behind garbled text like `entity[...]` or `citeturn0search0`. All cleanup is centralized in `services/protocol/chatgpt_markup.py`, invoked at the central hub by `iter_conversation_payloads`, benefiting chat completions, responses, anthropic, and `/api/chat/stream` protocols.
 
-| 标注 | 形态 | 处理方式 |
+| Markup | Pattern | Handling Method |
 |:--|:--|:--|
-| 实体卡片 | `entity["song","爱丫爱丫","BY2歌曲"]` | 解析 JSON 数组，取第二项作为名称替换 |
-| 搜索引用 | `citeturn0search2turn0search1` | 配合上游 `content_references` 元数据替换为 `[[N]](url)`；查不到链接则整段丢弃 |
-| 孤立 PUA 字符 | 单独的 U+E200..U+E203 | 直接抹去 |
+| Entity card | `entity["song","Ai Ya Ai Ya","BY2 Song"]` | Parse JSON array, replace with the second item as the name |
+| Search citation | `citeturn0search2turn0search1` | Replaced by `[[N]](url)` using upstream `content_references` metadata; discarded if no link found |
+| Isolated PUA character | Individual U+E200..U+E203 | Directly stripped |
 
-`content_references` 元数据通过递归扫描事件树捕获，无需额外网络请求。常见入口：
+`content_references` metadata is captured by recursively scanning the event tree, requiring no extra network requests. Common entry:
 
 ```json
 {"v":{"message":{"metadata":{"content_references":[
@@ -288,19 +288,18 @@ SSE 结束后可按以下顺序判断结果：
 ]}}}}
 ```
 
-**流式安全**：`ConversationState` 同时维护 raw `text` 与清洗后的 `clean_text`，每帧 patch 后只清洗"最后一个 `` 之前"的稳定前缀，未闭合的标记保留到下一帧再处理，避免半截标记泄露给客户端。`conversation.delta.delta` 字段恒为 clean 文本的增量。
+**Streaming Safety**: `ConversationState` maintains both raw `text` and `clean_text`. After each patch frame, only the stable prefix "before the last ``" is cleaned. Unclosed tags are held until the next frame, preventing partial tags from leaking to the client. The `conversation.delta.delta` field is always the clean text increment.
 
-## 视频引用卡片（前端渲染）
+## Video Reference Cards (Frontend Rendering)
 
-清洗后视频类引用以 `[[N]](https://www.youtube.com/watch?v=...)` 形式落在 markdown 里。OpenAI 兼容协议本身只走文本，**视频卡片是前端渲染层的事**，后端不变。
+After cleaning, video citations appear in the markdown as `[[N]](https://www.youtube.com/watch?v=...)`. The OpenAI-compatible protocol itself only handles text, and video cards are the responsibility of the frontend rendering layer; the backend remains unchanged.
 
-本项目自带的 web 前端（`web/src/app/chat/page.tsx`）通过 `ReactMarkdown` 的 `components.a` 钩子识别视频链接，命中时把 `<a>` 替换成 `VideoCard` 组件：
+The built-in web frontend of this project (`web/src/app/chat/page.tsx`) identifies video links through the components.a hook of ReactMarkdown, replacing `<a>` with a `VideoCard` component upon a match:
 
-- 解析逻辑：`web/src/lib/video.ts` 的 `parseVideoUrl`，认 YouTube（`youtube.com/watch?v=`、`youtu.be/`、`/embed/`、`/shorts/`）和 Bilibili（`bilibili.com/video/BV...`、`/video/av...`、`b23.tv` 短链）。
-- 缩略图：YouTube 从 video id 直接拼 `https://img.youtube.com/vi/{id}/hqdefault.jpg`；Bilibili 通过 `/api/video/metadata` 由后端解析封面和标题。
-- 播放：点击切换为对应站点的 iframe，内联播放。
-- 同消息内同 video id 去重：第一次出现渲染卡片，后续仍以普通链接呈现。
-- 非视频链接（普通 URL）正常按 `<a>` 渲染，不受影响。
+- Parsing logic: `parseVideoUrl` in `web/src/lib/video.ts`, supporting YouTube (`youtube.com/watch?v=`, `youtu.be/`, `/embed/`, `/shorts/`) and Bilibili (`bilibili.com/video/BV...`, `/video/av...`, and `b23.tv` short links).
+- Thumbnail: YouTube directly constructs `https://img.youtube.com/vi/{id}/hqdefault.jpg` from video id; Bilibili resolves cover and title from backend via `/api/video/metadata`.
+- Playback: Click to switch to the iframe of the corresponding site for inline playback.
+- Duplicate video ID removal within same message: Renders card on first appearance, subsequent ones render as normal links.
+- Non-video links (normal URLs) render normally as `<a>`, unaffected.
 
-其它 API 客户端（Cherry Studio、Android Draw 等）拿到的还是原始 `[[N]](url)`，按各自 markdown 能力呈现，与后端解耦。
-
+Other API clients (Cherry Studio, Android Draw, etc.) still receive the raw `[[N]](url)` and render it using their respective markdown capabilities, decoupled from the backend.

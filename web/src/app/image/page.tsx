@@ -48,8 +48,8 @@ const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
 const IMAGE_RESOLUTION_STORAGE_KEY = "chatgpt2api:image_last_resolution";
 const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
 const HIGH_RESOLUTION_VALUES = new Set(["2k", "4k"]);
-// 每个会话的滚动位置单独存。用 sessionStorage 因为这就是"会话级"的临时位置，
-// 关浏览器后从底部重看更自然；要跨浏览器会话保留改成 localStorage 即可。
+// Store scroll position per conversation separately. Using sessionStorage because this is "session-level" temporary positioning,
+// starting from the bottom on browser restart feels more natural; switch to localStorage for cross-session persistence.
 const SCROLL_POSITION_STORAGE_KEY = "chatgpt2api:image_scroll_positions";
 
 function clampImageCount(value: string) {
@@ -84,7 +84,7 @@ function formatConversationTime(value: string) {
 }
 
 function formatAvailableQuota() {
-  // 已废弃：admin 直接显示 ∞，不再走号池累加，留壳避免外部潜在调用炸掉。
+  // Deprecated: admin displays ∞ directly, no longer aggregates from account pool. Keeping shell to avoid breaking potential external calls.
   return "∞";
 }
 
@@ -99,7 +99,7 @@ function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("读取参考图失败"));
+    reader.onerror = () => reject(new Error("Failed to read reference image"));
     reader.readAsDataURL(file);
   });
 }
@@ -130,7 +130,7 @@ function buildReferenceImageFromResult(image: StoredImage, fileName: string): St
 async function fetchImageAsFile(url: string, fileName: string) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error("读取结果图失败");
+    throw new Error("Failed to read result image");
   }
   const blob = await response.blob();
   return new File([blob], fileName, { type: blob.type || "image/png" });
@@ -167,7 +167,7 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
         ...image,
         taskId: task.id,
         status: "error",
-        error: "未返回图片数据",
+        error: "No image data returned",
       };
     }
     return {
@@ -186,7 +186,7 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
       ...image,
       taskId: task.id,
       status: "error",
-      error: task.error || "生成失败",
+      error: task.error || "Generation failed",
     };
   }
 
@@ -195,7 +195,7 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
       ...image,
       taskId: task.id,
       status: "error",
-      error: task.error || "已取消",
+      error: task.error || "Canceled",
     };
   }
 
@@ -247,7 +247,7 @@ async function cancelTaskIdsSilently(ids: string[]) {
   try {
     await cancelImageTasks(ids);
   } catch {
-    // 取消失败不阻塞 UI 删除流程；后端任务会按重试/超时自然终止
+    // Cancel failure won't block UI deletion flow; backend tasks will naturally terminate via retry/timeout
   }
 }
 
@@ -259,7 +259,7 @@ function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> 
     return { status: turn.status === "queued" ? "queued" : "generating", error: undefined };
   }
   if (failedCount > 0) {
-    return { status: "error", error: `其中 ${failedCount} 张未成功生成` };
+    return { status: "error", error: `${failedCount} image(s) failed to generate` };
   }
   if (successCount > 0) {
     return { status: "success", error: undefined };
@@ -352,7 +352,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
         return {
           ...image,
           status: "error" as const,
-          error: "页面刷新或任务中断，未找到可恢复的任务 ID",
+          error: "Page refreshed or task interrupted, no recoverable task ID found",
         };
       });
       const derived = deriveTurnStatus({ ...turn, images });
@@ -393,7 +393,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const resultsViewportRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // 滚动位置：每个会话独立记一份，刷新/切页都能落回上次位置
+  // Scroll position: stored independently per conversation, refresh/page changes can return to last position
   const scrollPositionsRef = useRef<Record<string, number>>({});
   const restoredConversationIdRef = useRef<string | null>(null);
   const lastTurnCountRef = useRef<number>(0);
@@ -410,16 +410,16 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
-  const [availableQuota, setAvailableQuota] = useState("加载中...");
+  const [availableQuota, setAvailableQuota] = useState("Loading...");
   const [canUseHighResolution, setCanUseHighResolution] = useState(isAdmin);
   const [lightboxImages, setLightboxImages] = useState<ImageLightboxItem[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
-  // 底部渐隐条只在"内容超出视口且没滚到底"时显示——
-  // 没有内容、刚好填满、或者已经滚到底，都不应该看到那块灰雾。
+  // Bottom fade bar only shows when "content exceeds viewport and not scrolled to bottom" —
+  // no content, exactly fits, or already scrolled to bottom should not show the gray fog.
   const [showBottomFade, setShowBottomFade] = useState(false);
-  // 当用户在错误卡片上点击"回复"时记录的上下文，仅 UI 展示 + 提交时拼装 API prompt 用，
-  // 不会进入 turn.prompt 也不会进入聊天可见列表，所以用户视野里永远只有自己说过的话。
+  // Context recorded when user clicks "Reply" on an error card, only for UI display + assembling API prompt on submit.
+  // Won't enter turn.prompt or chat visible list, so user always only sees what they've said.
   const [replyTarget, setReplyTarget] = useState<{
     conversationId: string;
     sourceTurnId: string;
@@ -435,21 +435,21 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   >(null);
 
   const parsedCount = useMemo(() => Number(clampImageCount(imageCount)), [imageCount]);
-  // 提交前的乐观额度检查：拦掉那些"已发送对话"成功 toast 后又紧跟着 "额度不足" 错误 toast 的双弹。
-  // 管理员/不限额度/没拿到额度数据时一律放行，让后端兜底。
+  // Pre-submit optimistic quota check: prevent the double-toast where "sent conversation" success toast is immediately followed by "insufficient quota" error toast.
+  // Admin/unlimited/no quota data cases all pass through, letting backend handle it.
   const ensureQuotaForRequest = useCallback(
     (count: number) => {
       if (isAdmin) return true;
       if (availableQuota === "∞") return true;
-      if (availableQuota === "加载中..." || availableQuota === "--") return true;
+      if (availableQuota === "Loading..." || availableQuota === "--") return true;
       const remaining = Number(availableQuota);
       if (!Number.isFinite(remaining)) return true;
       if (remaining <= 0) {
-        toast.error("额度不足，请联系管理员追加额度后再试");
+        toast.error("Insufficient quota, please contact administrator to add more");
         return false;
       }
       if (remaining < count) {
-        toast.error(`剩余额度仅 ${remaining}，无法生成 ${count} 张`);
+        toast.error(`Only ${remaining} quota remaining, cannot generate ${count} images`);
         return false;
       }
       return true;
@@ -470,41 +470,41 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   );
   const deleteConfirmTitle =
     deleteConfirm?.type === "all"
-      ? "清空历史记录"
+      ? "Clear History"
       : deleteConfirm?.type === "prompt"
-        ? "删除提示词记录"
+        ? "Delete Prompt Record"
         : deleteConfirm?.type === "results"
-          ? "删除生成结果"
+          ? "Delete Generation Results"
           : deleteConfirm?.type === "one"
-            ? "删除对话"
+            ? "Delete Conversation"
             : "";
   const deleteConfirmDescription =
     deleteConfirm?.type === "all"
-      ? "确认删除全部图片历史记录吗？删除后无法恢复。"
+      ? "Are you sure you want to delete all image history? This cannot be undone."
       : deleteConfirm?.type === "prompt"
-        ? "确认删除这条提示词记录吗？对应生成结果会保留。"
+        ? "Are you sure you want to delete this prompt record? The generation results will be preserved."
         : deleteConfirm?.type === "results"
-          ? "确认删除这条生成结果吗？对应提示词记录会保留。"
+          ? "Are you sure you want to delete these generation results? The prompt record will be preserved."
           : deleteConfirm?.type === "one"
-            ? "确认删除这条图片对话吗？删除后无法恢复。"
+            ? "Are you sure you want to delete this image conversation? This cannot be undone."
             : "";
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
 
-  // /works 页"用此图重画"会把 { rel, url, prompt } 写进 sessionStorage 然后跳过来。
-  // 这里 mount 时读一次：拉图 → 转 File + dataUrl → 塞参考图区，prompt 直接灌输入框。
-  // 读完立刻清掉 key，避免下次刷新页面又触发一次。
-  // 优先用 rel 拼 `/images/${rel}` 同源拉取，避开 item.url 是后端绝对地址跨源 fetch 撞 CORS
-  // (浏览器允许 <img> 跨源加载但拦 fetch，旧版直接传 url 会在这里报 "Failed to fetch")
+  // /works page "Redraw with this image" writes { rel, url, prompt } to sessionStorage then navigates here.
+  // On mount, read once: fetch image → convert to File + dataUrl → put in reference image area, prompt fills input box.
+  // Clear key immediately after reading to avoid re-triggering on next page refresh.
+  // Prefer using rel to build `/images/${rel}` same-origin fetch, avoiding CORS issues when item.url is a backend absolute address
+  // (browsers allow <img> cross-origin load but block fetch; old version passing url directly would throw "Failed to fetch" here)
   // ---
-  // 不用 cancelled 守卫的原因：dev 模式 Strict Mode 会跑 effect 两次：
-  //   1) 首次：读到 payload，removeItem，启动 fetch
-  //   2) 首次 cleanup: cancelled=true
-  //   3) 二次：再读 sessionStorage 已为 null，直接 return（没新 fetch）
-  //   4) 首次 fetch 完成 → cancelled=true → 结果被丢弃，state 永远不设
-  // 现象就是"不报错也没图"。改用 ref 哨兵保证全局只消费一次，且不让 cleanup 阻断结果落盘。
+  // Reason for not using cancelled guard: dev mode Strict Mode runs effect twice:
+  //   1) First: reads payload, removeItem, starts fetch
+  //   2) First cleanup: cancelled=true
+  //   3) Second: reads sessionStorage as null, returns directly (no new fetch)
+  //   4) First fetch completes → cancelled=true → result discarded, state never set
+  // Result is "no error but no image". Using ref sentinel ensures global single consumption, and cleanup won't block result persistence.
   const redrawHandoffConsumedRef = useRef(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -525,7 +525,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       return;
     }
     const rel = payload?.rel?.trim().replace(/^\/+/, "");
-    // 优先 rel → 同源 /images/<rel>，没有 rel 兜底 url（老 handoff 格式）
+    // Prefer rel → same-origin /images/<rel>, fallback to url (old handoff format)
     const sourceUrl = rel ? `/images/${rel}` : payload?.url?.trim();
     if (!sourceUrl) return;
 
@@ -538,13 +538,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           { name: file.name, type: file.type || "image/png", dataUrl },
         ]);
         setReferenceImageFiles((prev) => [...prev, file]);
-        // prompt 单独处理：可能为空（老数据 / 用户没填），有就灌进去，没有就留空让用户写
+        // Prompt handled separately: may be empty (old data / user didn't fill), if present fill it in, otherwise leave empty for user to write
         if (payload?.prompt && payload.prompt.trim()) {
           setImagePrompt(payload.prompt);
         }
-        toast.success("已加入参考图，调整描述后即可重画");
+        toast.success("Reference image added. Adjust description and regenerate");
       } catch (error) {
-        const message = error instanceof Error ? error.message : "读取参考图失败";
+        const message = error instanceof Error ? error.message : "Failed to read reference image";
         toast.error(message);
       }
     })();
@@ -563,7 +563,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setImageResolution(storedResolution || "");
         setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
-        // 滚动位置表只在浏览器侧、首次进入时加载一次
+        // Scroll position table only loaded once on browser side on first entry
         if (typeof window !== "undefined") {
           try {
             const raw = window.sessionStorage.getItem(SCROLL_POSITION_STORAGE_KEY);
@@ -578,7 +578,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               }
             }
           } catch {
-            // 解析失败就当作没有
+            // Parse failure treated as non-existent
           }
         }
 
@@ -594,7 +594,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) : null;
         let nextSelectedConversationId: string | null;
         if (storedConversationId === "") {
-          // 用户主动通过"新建"进入空状态，刷新后保留空状态
+          // User actively entered empty state via "New", preserve empty state after refresh
           nextSelectedConversationId = null;
         } else if (
           storedConversationId &&
@@ -607,7 +607,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setSelectedConversationId(nextSelectedConversationId);
         initialLoadCompleteRef.current = true;
       } catch (error) {
-        const message = error instanceof Error ? error.message : "读取会话记录失败";
+        const message = error instanceof Error ? error.message : "Failed to load conversation history";
         toast.error(message);
       } finally {
         if (!cancelled) {
@@ -624,15 +624,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const loadQuota = useCallback(async () => {
     if (isAdmin) {
-      // 管理员密钥层面是全档不限额，画图能力的真实瓶颈在号池而非密钥额度。
-      // 顶部展示的是"我自己这把密钥的画图额度"，所以直接显示 ∞——
-      // 号池可用量在「号池管理」页有更准确的视图。
+      // Admin key is fully unlimited at the key level; the real bottleneck for image generation is the account pool, not key quota.
+      // The top display shows "my own key's image quota", so directly show ∞ —
+      // account pool availability has a more accurate view on the "Pool Management" page.
       setCanUseHighResolution(true);
       setAvailableQuota("∞");
       return;
     }
-    // 普通用户：显示自己密钥的剩余画图额度。三档（日/月/总）任一不限即视作 ∞，
-    // 否则取最小剩余作为可用画图张数——这样按钮禁用与上游 402 分支保持一致。
+    // Normal user: show remaining image quota for their key. If any of the three tiers (daily/monthly/total) is unlimited, treat as ∞,
+    // otherwise take the minimum remaining as available image count — this keeps button disable state consistent with upstream 402 branch.
     try {
       const { identity } = await fetchMyIdentity();
       const canHighResolution = Boolean(
@@ -670,7 +670,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setAvailableQuota(String(Math.min(...candidates)));
       }
     } catch {
-      setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
+      setAvailableQuota((prev) => (prev === "Loading..." ? "--" : prev));
     }
   }, [isAdmin]);
 
@@ -691,18 +691,18 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     };
   }, [isAdmin, loadQuota]);
 
-  // 滚动行为：
-  // 1) 切换/打开会话首帧 → 同步落到上次记忆的 scrollTop（落不到就到底，无动画）
-  // 2) 用户提交新一轮（turns.length 增加）或本轮生成完成（活跃数从 >0 → 0）→ smooth 滚到底
-  // 3) 其他时候（图片状态在轮询、对话内容微调）不再强制滚动，用户可以正常向上看历史
+  // Scroll behavior:
+  // 1) Switch/open conversation first frame → sync to last remembered scrollTop (fallback to bottom, no animation)
+  // 2) User submits new turn (turns.length increases) or current turn completes (active count from >0 → 0) → smooth scroll to bottom
+  // 3) Other times (image status polling, conversation content fine-tuning) no longer force scroll, user can scroll up to view history
   useLayoutEffect(() => {
     const viewport = resultsViewportRef.current;
     if (!viewport) {
       return;
     }
 
-    // 进入"空状态"（点新建 / 删完对话）：把上一会话残留的 scrollTop 清掉，
-    // 否则 h-full 的 aurora 视觉中心会被之前的滚动位置顶上去。
+    // Entering "empty state" (clicked New / deleted all conversations): clear previous conversation's residual scrollTop,
+    // otherwise h-full aurora visual center will be pushed up by previous scroll position.
     if (!selectedConversation) {
       viewport.scrollTo({ top: 0, behavior: "auto" });
       restoredConversationIdRef.current = null;
@@ -717,12 +717,12 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const stats = getImageConversationStats(selectedConversation);
     const activeCount = stats.queued + stats.running;
 
-    // 第一次看到这个会话：恢复滚动位置
+    // First time seeing this conversation: restore scroll position
     if (restoredConversationIdRef.current !== conversationId) {
       restoredConversationIdRef.current = conversationId;
       const savedTop = scrollPositionsRef.current[conversationId];
       if (typeof savedTop === "number" && Number.isFinite(savedTop)) {
-        // 内容此时可能还没完全 layout 出来，先 jump 一次再下一帧补一次
+        // Content may not be fully laid out yet, jump once then fix on next frame
         viewport.scrollTo({ top: savedTop, behavior: "auto" });
         requestAnimationFrame(() => {
           viewport.scrollTo({ top: savedTop, behavior: "auto" });
@@ -742,8 +742,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
     }
 
-    // 内容变化时同步重算渐隐：滚动事件不会因 turn 增减自动触发，
-    // 必须在 layout 阶段亲自量一次，否则新增内容被 composer 遮住时灰雾不会出现。
+    // Recalculate fade on content change: scroll events won't fire automatically on turn add/remove,
+    // must manually measure during layout phase, otherwise gray fog won't appear when new content is hidden by composer.
     const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     setShowBottomFade(remaining > 8);
 
@@ -751,7 +751,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     lastActiveCountRef.current = activeCount;
   }, [selectedConversation]);
 
-  // 切走会话时立即把当前滚动位置落盘，避免下次回来还没来得及保存
+  // Save current scroll position to storage immediately when switching away from conversation, to avoid losing it before next save
   useEffect(() => {
     return () => {
       const viewport = resultsViewportRef.current;
@@ -765,7 +765,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               JSON.stringify(scrollPositionsRef.current),
             );
           } catch {
-            // 容量满或被禁用时静默
+            // Silently fail when storage is full or disabled
           }
         }
       }
@@ -776,7 +776,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     if (typeof window === "undefined") {
       return;
     }
-    // 初次加载完成前不写入，避免覆盖掉本地原有有效值
+    // Don't write before initial load completes, to avoid overwriting existing valid local value
     if (!initialLoadCompleteRef.current) {
       return;
     }
@@ -784,7 +784,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     if (selectedConversationId) {
       window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, selectedConversationId);
     } else {
-      // 空串作为"用户主动进入空状态"的标记，区别于从未设置的 null
+      // Empty string as marker for "user actively entered empty state", distinct from never-set null
       window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, "");
     }
   }, [selectedConversationId]);
@@ -853,7 +853,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     ) => {
       const current = conversationsRef.current.find((item) => item.id === conversationId) ?? null;
       if (!current) {
-        // 对话已被删除（或从未存在），不再写回，避免轮询任务"复活"已删数据
+        // Conversation was deleted (or never existed), don't write back, avoid polling tasks "reviving" deleted data
         return;
       }
       const nextConversation = updater(current);
@@ -908,7 +908,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     try {
       await deleteImageConversation(id);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "删除会话失败";
+      const message = error instanceof Error ? error.message : "Failed to delete conversation";
       toast.error(message);
       const items = await listImageConversations();
       conversationsRef.current = items;
@@ -940,7 +940,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           status: part === "results" && turn.status === "generating" ? "error" as const : turn.status,
           images:
             part === "results"
-              ? turn.images.map((image) => ({ id: image.id, status: "error" as const, error: "生成结果已删除" }))
+              ? turn.images.map((image) => ({ id: image.id, status: "error" as const, error: "Generation results deleted" }))
               : turn.images,
         };
         return nextTurn.promptDeleted && nextTurn.resultsDeleted ? null : nextTurn;
@@ -972,9 +972,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       setSelectedConversationId(null);
       resetComposer();
       void cancelTaskIdsSilently(taskIdsToCancel);
-      toast.success("已清空历史记录");
+      toast.success("History cleared");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "清空历史记录失败";
+      const message = error instanceof Error ? error.message : "Failed to clear history";
       toast.error(message);
     }
   };
@@ -988,7 +988,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     try {
       await renameImageConversation(id, title);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "重命名失败";
+      const message = error instanceof Error ? error.message : "Rename failed";
       toast.error(message);
     }
   };
@@ -1048,7 +1048,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         fileInputRef.current.value = "";
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "读取参考图失败";
+      const message = error instanceof Error ? error.message : "Failed to read reference image";
       toast.error(message);
     }
   }, []);
@@ -1095,28 +1095,28 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         setReferenceImageFiles((prev) => [...prev, nextReference.file]);
         setImagePrompt("");
         textareaRef.current?.focus();
-        toast.success("已加入当前参考图，继续输入描述即可编辑");
+        toast.success("Added to reference images. Enter a description to continue editing");
       } catch (error) {
-        const message = error instanceof Error ? error.message : "读取结果图失败";
+        const message = error instanceof Error ? error.message : "Failed to read result image";
         toast.error(message);
       }
     },
     [],
   );
 
-  // 单图发布到画廊的状态机：image.id → state。
-  // 用 Map<string, ImagePublishState> 而不是数组，O(1) 查询；
-  // 不持久化到 localforage，刷新页面回落"未发布"——是否发过让"画廊"页自己说了算，
-  // 这里只是一次会话内的视觉反馈避免重复点击。
+  // Single image publish to gallery state machine: image.id → state.
+  // Using Map<string, ImagePublishState> instead of array for O(1) lookup;
+  // Not persisted to localforage, refreshing page falls back to "not published" — whether published is determined by the "Gallery" page,
+  // this is just visual feedback within a session to prevent duplicate clicks.
   const [publishStates, setPublishStates] = useState<Map<string, ImagePublishState>>(
     () => new Map(),
   );
 
   const publishStateOf = useCallback(
     (image: StoredImage): ImagePublishState => {
-      // 优先读已记录的状态；没有就按图本身能不能发判断：
-      //   - 有 url（http(s)）：可发，初始 idle
-      //   - 仅 b64_json：本地编辑产物 / 远端不可寻址，不能用 image_rel 主键 → unsupported
+      // Prefer recorded state; otherwise determine by whether the image can be published:
+      //   - Has url (http(s)): can publish, initial idle
+      //   - Only b64_json: local edit product / not addressable remotely, cannot use image_rel primary key → unsupported
       const recorded = publishStates.get(image.id);
       if (recorded) return recorded;
       if (image.url && /^https?:\/\//i.test(image.url)) return "idle";
@@ -1126,9 +1126,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   );
 
   /**
-   * 从生成结果 url 抠出 image_rel：
+   * Extract image_rel from generation result url:
    *   http://host:8000/images/2026/05/21/xxx.png?t=123 → 2026/05/21/xxx.png
-   * 跟后端 image_owners.json / gallery_service 用同一份 rel 主键。
+   * Uses the same rel primary key as backend image_owners.json / gallery_service.
    */
   const extractImageRel = useCallback((url: string | undefined): string | null => {
     if (!url) return null;
@@ -1149,7 +1149,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
       const rel = extractImageRel(image.url);
       if (!rel) {
-        toast.error("当前图片无法发布到画廊");
+        toast.error("This image cannot be published to gallery");
         setPublishStates((prev) => {
           const next = new Map(prev);
           next.set(image.id, "unsupported");
@@ -1158,7 +1158,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         return;
       }
 
-      // 进入 publishing：UI 上按钮转圈
+      // Enter publishing: button shows spinner on UI
       setPublishStates((prev) => {
         const next = new Map(prev);
         next.set(image.id, "publishing");
@@ -1177,24 +1177,24 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           next.set(image.id, "published");
           return next;
         });
-        toast.success("已发布到画廊");
+        toast.success("Published to gallery");
       } catch (error) {
-        // 发布失败回滚成 idle，让用户能重试
+        // Publish failure rolls back to idle, letting user retry
         setPublishStates((prev) => {
           const next = new Map(prev);
           next.set(image.id, "idle");
           return next;
         });
-        const message = error instanceof Error ? error.message : "发布失败";
+        const message = error instanceof Error ? error.message : "Publish failed";
         toast.error(message);
       }
     },
     [extractImageRel],
   );
 
-  // 模型反问/拒绝时点"回复"。把 AI 反问 + 上一轮 prompt 都收纳进 replyTarget，
-  // 但不动输入框文本——用户写入框里的永远是他自己说的话。
-  // 提交时由 handleSubmit / runConversationQueue 把这份上下文偷偷拼进发给模型的 prompt。
+  // When model asks a question/refuses, clicking "Reply". Stores AI question + previous turn prompt into replyTarget,
+  // but doesn't modify input box text — what's in the input box is always what the user said.
+  // On submit, handleSubmit / runConversationQueue silently prepends this context to the prompt sent to the model.
   const handleReplyToTurn = useCallback((conversationId: string, turnId: string, aiMessage: string) => {
     const conversation = conversationsRef.current.find((item) => item.id === conversationId);
     const sourceTurn = conversation?.turns.find((turn) => turn.id === turnId);
@@ -1210,7 +1210,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       aiMessage,
     });
 
-    // 把当前轮的参考图也带过来，否则模型回答的将是空气。
+    // Bring over reference images from the current turn as well, otherwise model will be answering into thin air.
     if (sourceTurn.referenceImages.length > 0) {
       setReferenceImages(sourceTurn.referenceImages);
       setReferenceImageFiles(
@@ -1250,7 +1250,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       fileInputRef.current.value = "";
     }
     textareaRef.current?.focus();
-    toast.success("已复用这条提示词配置");
+    toast.success("Prompt configuration reused");
   }, [canUseHighResolution]);
 
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
@@ -1344,11 +1344,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           dataUrlToFile(image.dataUrl, image.name || `${activeTurn.id}-${index + 1}.png`, image.type),
         );
         if (activeTurn.mode === "edit" && referenceFiles.length === 0) {
-          throw new Error("未找到可用于继续编辑的参考图");
+          throw new Error("No reference image found for continued editing");
         }
 
-        // 用户视野里 turn.prompt 永远只有自己说过的话；
-        // 但调用模型时要把上一轮 prompt + AI 反问拼回去，让模型有上下文判断如何作画。
+        // What's in turn.prompt for the user is always only what they said;
+        // but when calling the model, we need to prepend previous turn prompt + AI question for context.
         const apiPrompt = (() => {
           const ctx = activeTurn.replyContext;
           if (!ctx) {
@@ -1356,12 +1356,12 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           }
           const lines: string[] = [];
           if (ctx.sourcePrompt.trim()) {
-            lines.push(`[上一轮我的请求] ${ctx.sourcePrompt.trim()}`);
+            lines.push(`[My previous request] ${ctx.sourcePrompt.trim()}`);
           }
           if (ctx.aiMessage.trim()) {
-            lines.push(`[你上一轮的反问] ${ctx.aiMessage.trim()}`);
+            lines.push(`[Your previous question] ${ctx.aiMessage.trim()}`);
           }
-          lines.push(`[我的回答] ${activeTurn.prompt}`);
+          lines.push(`[My reply] ${activeTurn.prompt}`);
           return lines.join("\n");
         })();
 
@@ -1411,7 +1411,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
         await loadQuota();
       } catch (error) {
-        const message = error instanceof Error ? error.message : "生成图片失败";
+        const message = error instanceof Error ? error.message : "Image generation failed";
         await updateConversation(conversationId, (current) => {
           const conversation = current ?? snapshot;
           return {
@@ -1478,7 +1478,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         images: createLoadingImages(nextTurnId, count),
         createdAt: now,
         status: "queued",
-        // 重新生成时保留原 turn 的回复上下文，否则模型会丢失上一轮的对话语境。
+        // Preserve original turn's reply context during regeneration, otherwise model loses previous turn's dialogue context.
         replyContext: sourceTurn.replyContext,
       };
       const nextConversation = {
@@ -1490,7 +1490,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       setSelectedConversationId(conversationId);
       await persistConversation(nextConversation);
       void runConversationQueue(conversationId);
-      toast.success("已加入重新生成队列");
+      toast.success("Added to regeneration queue");
     },
     [ensureQuotaForRequest, runConversationQueue],
   );
@@ -1563,7 +1563,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const handleSubmit = async () => {
     const prompt = imagePrompt.trim();
     if (!prompt) {
-      toast.error("请输入提示词");
+      toast.error("Please enter a prompt");
       return;
     }
 
@@ -1579,7 +1579,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const now = new Date().toISOString();
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
-    // 仅当回复目标属于当前对话时才挂上下文，避免切换对话后 replyTarget 漏带。
+    // Only attach context when reply target belongs to current conversation, avoid replyTarget leaking after switching conversations.
     const activeReplyContext =
       replyTarget && replyTarget.conversationId === conversationId
         ? {
@@ -1623,9 +1623,9 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     await persistConversation(baseConversation);
     void runConversationQueue(conversationId);
 
-    // 不再弹"已发送 / 已创建 / 已加入队列"toast：
-    // 用户刚点了发送按钮，下方画布会立刻出现"处理中"占位卡，
-    // 状态变化已经可见，再弹一条 toast 反而打断节奏。
+    // No longer showing "sent / created / added to queue" toast:
+    // User just clicked the send button, the canvas below will immediately show a "processing" placeholder card,
+    // state change is already visible, popping another toast would break the rhythm.
   };
 
   return (
@@ -1640,7 +1640,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           >
             <History className="size-4 text-muted-foreground" />
             <span className="max-w-[180px] truncate text-[13px] font-medium sm:max-w-[260px]">
-              历史对话
+              History
             </span>
             <span className="font-data text-[10px] text-muted-foreground">{conversations.length}</span>
           </Button>
@@ -1649,29 +1649,29 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             onClick={handleCreateDraft}
           >
             <Plus className="size-4" />
-            <span className="hidden sm:inline text-[13px]">新建</span>
+            <span className="hidden sm:inline text-[13px]">New</span>
           </Button>
           <Button
             variant="outline"
             className="h-9 cursor-pointer rounded-lg border-border bg-card/90 px-2 text-muted-foreground shadow-[0_4px_16px_-6px_rgba(15,23,42,0.18)] backdrop-blur hover:text-rose-500"
             onClick={openClearHistoryConfirm}
             disabled={conversations.length === 0}
-            title="清空历史"
+            title="Clear history"
           >
             <Trash2 className="size-4" />
           </Button>
           </div>
           <div className="pointer-events-auto ml-auto flex items-center gap-2">
             <span className="hidden items-center gap-1.5 rounded-md border border-border bg-card/90 px-2 py-1 shadow-[0_4px_16px_-6px_rgba(15,23,42,0.18)] backdrop-blur sm:inline-flex">
-              <span className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">额度</span>
+              <span className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Quota</span>
               {availableQuota === "∞" ? (
-                <InfinityIcon className="size-3.5 text-foreground" strokeWidth={2.25} aria-label="不限额度" />
+                <InfinityIcon className="size-3.5 text-foreground" strokeWidth={2.25} aria-label="Unlimited quota" />
               ) : (
                 <span className="font-data tabular-nums text-[12px] font-semibold text-foreground">{availableQuota}</span>
               )}
             </span>
             <span className="hidden items-center gap-1.5 rounded-md border border-border bg-card/90 px-2 py-1 shadow-[0_4px_16px_-6px_rgba(15,23,42,0.18)] backdrop-blur sm:inline-flex">
-              <span className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">运行</span>
+              <span className="font-data text-[10px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Active</span>
               <span className="font-data tabular-nums text-[12px] font-semibold text-foreground">{activeTaskCount}</span>
             </span>
           </div>
@@ -1682,7 +1682,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             <DialogHeader className="shrink-0 border-b border-border/50 px-6 py-4">
               <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
                 <History className="size-[17px] text-muted-foreground" strokeWidth={2} />
-                历史对话
+                History
                 <span className="ml-1 font-data text-[11px] font-medium text-muted-foreground/70">
                   {conversations.length}
                 </span>
@@ -1717,8 +1717,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             ref={resultsViewportRef}
             onScroll={(event) => {
               const target = event.currentTarget;
-              // 同步底部渐隐：剩余可滚距离大于一行高度时才显示，
-              // 滚到底/没溢出都让它消失，避免无内容时灰雾常驻。
+              // Sync bottom fade: only show when remaining scrollable distance exceeds one line height,
+              // hide when scrolled to bottom / no overflow, avoiding gray fog persisting when there's no content.
               const remaining = target.scrollHeight - target.scrollTop - target.clientHeight;
               setShowBottomFade(remaining > 8);
               const conversationId = restoredConversationIdRef.current;
@@ -1735,15 +1735,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                     JSON.stringify(scrollPositionsRef.current),
                   );
                 } catch {
-                  // 容量满或被禁用时静默
+                  // Silently fail when storage is full or disabled
                 }
               }, 200);
             }}
             className={`hide-scrollbar min-h-0 flex-1 overscroll-contain px-1 pt-14 pb-6 sm:px-4 sm:pt-16 sm:pb-8 ${selectedConversation ? "overflow-y-auto" : "overflow-hidden"}`}
           >
             {isLoadingHistory ? (
-              // 历史加载完成前先占位，避免 selectedConversation === null 触发的"空状态"
-              // aurora 大屏闪现一下又跳走的视觉抖动。
+              // Placeholder before history finishes loading, avoiding the "empty state"
+              // aurora big screen flashing briefly then jumping away visual jitter when selectedConversation === null.
               <div aria-hidden className="h-full" />
             ) : (
               <ImageResults
@@ -1788,8 +1788,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                   : null
               }
               onCancelReply={() => {
-                // 回复时的参考图是 handleReplyToTurn 自动塞进来的，
-                // 用户取消回复时一并清掉，避免缩略图又"复活"。
+                // Reference images during reply were automatically added by handleReplyToTurn,
+                // clear them together when user cancels reply, avoiding thumbnails "resurrecting".
                 setReplyTarget(null);
                 setReferenceImages([]);
                 setReferenceImageFiles([]);
@@ -1830,10 +1830,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
-                取消
+                Cancel
               </Button>
               <Button className="bg-rose-600 text-white hover:bg-rose-700" onClick={() => void handleConfirmDelete()}>
-                确认删除
+                Confirm Delete
               </Button>
             </DialogFooter>
           </DialogContent>

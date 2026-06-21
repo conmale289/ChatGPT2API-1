@@ -105,7 +105,7 @@ function VideoCardBase({ video, label, className }: VideoCardProps) {
               "group absolute inset-0 flex h-full w-full items-center justify-center overflow-hidden text-left",
               resolvedVideo.embedUrl ? "cursor-pointer" : "cursor-wait",
             )}
-            aria-label="播放视频"
+            aria-label="Play video"
           >
             {hasThumb ? (
               <img
@@ -118,8 +118,8 @@ function VideoCardBase({ video, label, className }: VideoCardProps) {
               />
             ) : (
               <span className="absolute right-3 bottom-3 left-3 line-clamp-2 rounded-md bg-background/85 px-2 py-1 text-center text-[12px] leading-5 text-foreground shadow-sm backdrop-blur-sm">
-                {resolvedVideo.title || label || "Bilibili 视频"}
-                {metadataFailed ? <span className="ml-1 text-muted-foreground">（封面获取失败）</span> : null}
+                {resolvedVideo.title || label || "Bilibili Video"}
+                {metadataFailed ? <span className="ml-1 text-muted-foreground">(Failed to load thumbnail)</span> : null}
               </span>
             )}
             {hasThumb ? <span className="absolute inset-0 bg-black/20 transition-opacity group-hover:bg-black/30" /> : null}
@@ -150,7 +150,7 @@ function VideoCardBase({ video, label, className }: VideoCardProps) {
           rel="noreferrer noopener"
           className="shrink-0 text-primary hover:underline"
         >
-          打开原站
+          Open original
         </a>
       </span>
     </span>

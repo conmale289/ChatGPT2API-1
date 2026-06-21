@@ -180,7 +180,7 @@ export function ImageLightbox({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, goPrev, goNext]);
 
-  // 缩略图带：当前项滚动进可视区
+  // Thumbnail strip: scroll current item into view
   useEffect(() => {
     if (!open) return;
     const node = thumbRefs.current[currentIndex];
@@ -189,7 +189,7 @@ export function ImageLightbox({
     }
   }, [currentIndex, open]);
 
-  // 鼠标滚轮切换：缩放态下不接管，节流到每 ~280ms 一次，避免触摸板瞬间狂切
+  // Mouse wheel navigation: disabled when zoomed in, throttled to ~280ms to prevent rapid switching on trackpads
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLDivElement>) => {
       if (transform.scale > minScale) return;
@@ -375,7 +375,7 @@ export function ImageLightbox({
           onPointerDownOutside={(e) => e.preventDefault()}
         >
           <DialogPrimitive.Title className="sr-only">
-            图片预览
+            Image Preview
           </DialogPrimitive.Title>
 
           <div className="absolute top-[calc(env(safe-area-inset-top)+1rem)] right-4 z-10 flex items-center gap-2">
@@ -393,13 +393,13 @@ export function ImageLightbox({
               type="button"
               onClick={handleDownload}
               className="inline-flex size-9 items-center justify-center rounded-full bg-black/50 text-white/90 transition hover:bg-black/70"
-              aria-label="下载图片"
+              aria-label="Download image"
             >
               <Download className="size-4" />
             </button>
             <DialogPrimitive.Close className="inline-flex size-9 items-center justify-center rounded-full bg-black/50 text-white/90 transition hover:bg-black/70">
               <X className="size-4" />
-              <span className="sr-only">关闭</span>
+              <span className="sr-only">Close</span>
             </DialogPrimitive.Close>
           </div>
 
@@ -423,7 +423,7 @@ export function ImageLightbox({
                       ? "border-white/90"
                       : "border-transparent opacity-70 hover:opacity-100",
                   )}
-                  aria-label={`第 ${index + 1} 张`}
+                  aria-label={`Image ${index + 1}`}
                   aria-current={index === currentIndex}
                 >
                   <img

@@ -39,8 +39,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # 动态接口禁缓存：/api/* 与 /v1/* 都是后端业务数据，浏览器若自行启发式缓存
-    # 会出现"改了配置/数据但 UI 不更新"的诡异现象。一律 no-store 让每次都打到后端。
+    # No cache for dynamic interfaces: /api/* and /v1/* are backend business data. If the browser performs heuristic caching,
+    # strange behaviors like "configuration/data updated but UI not refreshed" can occur. Enforce no-store to hit the backend every time.
     @app.middleware("http")
     async def _no_store_for_api(request: Request, call_next):
         response = await call_next(request)

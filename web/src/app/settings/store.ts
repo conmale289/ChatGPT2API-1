@@ -113,18 +113,20 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
   };
 }
 
-// 测试连接 / 立即备份前的本地必填校验：必须先有 R2 四要素 + bucket，
-// 否则别走 saveConfig，免得后端 200 返回触发"配置已保存"成功 toast，
-// 紧接着实际操作再报错，UI 同时冒两条互相打架的提示。
+// Local required-field validation before testing connection / running backup:
+// R2 must have all four fields + bucket filled in first,
+// otherwise don't call saveConfig to avoid the backend returning 200 triggering
+// a "config saved" success toast, followed by the actual operation erroring out,
+// causing two conflicting toasts to appear simultaneously.
 function collectMissingBackupFields(backup: BackupSettings | undefined | null): string | null {
   if (!backup) {
-    return "R2 备份配置";
+    return "R2 backup configuration";
   }
   const required: Array<{ key: keyof BackupSettings; label: string }> = [
     { key: "account_id", label: "Cloudflare Account ID" },
     { key: "access_key_id", label: "Access Key ID" },
     { key: "secret_access_key", label: "Secret Access Key" },
-    { key: "bucket", label: "Bucket 名称" },
+    { key: "bucket", label: "Bucket Name" },
   ];
   const missing = required
     .filter((item) => !String(backup[item.key] ?? "").trim())
@@ -132,7 +134,7 @@ function collectMissingBackupFields(backup: BackupSettings | undefined | null): 
   if (missing.length === 0) {
     return null;
   }
-  return missing.join("、");
+  return missing.join(", ");
 }
 
 function normalizeFiles(items: CPARemoteFile[]) {
@@ -157,9 +159,9 @@ type SettingsStore = {
   isLoadingConfig: boolean;
   isSavingConfig: boolean;
   /**
-   * config 自上次成功 load / save 之后是否有改动。
-   * 任意 setXxx 都会置 true；loadConfig / saveConfig 成功后回 false。
-   * FloatingSaveBar 只有 isDirty=true 才浮现，干净状态下完全不占视觉位。
+   * Whether config has been modified since last successful load / save.
+   * Any setXxx will set this to true; loadConfig / saveConfig resets to false on success.
+   * FloatingSaveBar only appears when isDirty=true; clean state takes no visual space.
    */
   isDirty: boolean;
   backups: BackupItem[];
@@ -198,7 +200,7 @@ type SettingsStore = {
   initialize: () => Promise<void>;
   loadConfig: () => Promise<void>;
   saveConfig: () => Promise<boolean>;
-  /** 取消未保存修改：重新拉一次 config 把 dirty 打回去。 */
+  /** Discard unsaved changes: re-fetch config to reset dirty state. */
   revertConfig: () => Promise<void>;
   loadBackups: (silent?: boolean) => Promise<void>;
   runBackup: () => Promise<void>;
@@ -316,9 +318,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   loadConfig: async () => {
-    // 已有 config 时视为静默刷新：保持原有的 isLoadingConfig=false，
-    // 不让 ConfigCard 在路由切回时坍缩成 spinner 小卡片再撑回大卡片，
-    // 避免一次几百像素的 CLS。第一次加载（config 仍为 null）才正常走 loading。
+    // When config already exists, treat as silent refresh: keep isLoadingConfig=false,
+    // preventing ConfigCard from collapsing to a spinner when navigating back,
+    // avoiding a CLS shift of several hundred pixels. First load (config still null) uses normal loading.
     const silent = get().config !== null;
     if (!silent) {
       set({ isLoadingConfig: true });
@@ -326,14 +328,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     try {
       const data = await fetchSettingsConfig();
       const normalized = normalizeConfig(data.config);
-      // load 成功 = 当前内存 config 跟服务端一致，把 dirty 打回去
+      // load success = in-memory config matches server, reset dirty
       set({
         config: normalized,
         isDirty: false,
       });
     } catch (error) {
       if (!silent) {
-        toast.error(error instanceof Error ? error.message : "加载系统配置失败");
+        toast.error(error instanceof Error ? error.message : "Failed to load system config");
       }
     } finally {
       if (!silent) {
@@ -343,8 +345,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   /**
-   * 取消未保存修改：重新拉一次 config 覆盖内存值，把 dirty 打回去。
-   * 走 loadConfig 同款路径，silent 模式不打扰用户。
+   * Discard unsaved changes: re-fetch config to overwrite in-memory value and reset dirty.
+   * Uses the same path as loadConfig, in silent mode to avoid disturbing the user.
    */
   revertConfig: async () => {
     set({ config: null });
@@ -355,7 +357,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         isDirty: false,
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "撤销失败");
+      toast.error(error instanceof Error ? error.message : "Failed to revert");
     }
   },
 
@@ -404,10 +406,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         config: normalizeConfig(data.config),
         isDirty: false,
       });
-      toast.success("配置已保存");
+      toast.success("Config saved");
       return true;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存系统配置失败");
+      toast.error(error instanceof Error ? error.message : "Failed to save system config");
       return false;
     } finally {
       set({ isSavingConfig: false });
@@ -549,7 +551,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   loadBackups: async (silent = false) => {
-    // 已有数据时同样视作静默刷新，避免 BackupSettingsCard 切回时坍缩。
+    // When data already exists, also treat as silent refresh to avoid BackupSettingsCard collapsing.
     const effectiveSilent = silent || get().backups.length > 0 || get().backupState !== null;
     if (!effectiveSilent) {
       set({ isLoadingBackups: true });
@@ -562,7 +564,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       });
     } catch (error) {
       if (!effectiveSilent) {
-        toast.error(error instanceof Error ? error.message : "加载备份列表失败");
+        toast.error(error instanceof Error ? error.message : "Failed to load backup list");
       }
     } finally {
       if (!effectiveSilent) {
@@ -574,7 +576,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   runBackup: async () => {
     const missing = collectMissingBackupFields(get().config?.backup);
     if (missing) {
-      toast.error(`请先填写${missing}`);
+      toast.error(`Please fill in ${missing} first`);
       return;
     }
     set({ isRunningBackup: true });
@@ -584,10 +586,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         return;
       }
       const data = await runBackupNow();
-      toast.success(`备份已完成：${data.result.key}`);
+      toast.success(`Backup completed: ${data.result.key}`);
       await get().loadBackups(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "执行备份失败");
+      toast.error(error instanceof Error ? error.message : "Backup failed");
     } finally {
       set({ isRunningBackup: false });
     }
@@ -597,10 +599,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set({ deletingBackupKey: key });
     try {
       await deleteBackup(key);
-      toast.success("备份已删除");
+      toast.success("Backup deleted");
       await get().loadBackups(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除备份失败");
+      toast.error(error instanceof Error ? error.message : "Failed to delete backup");
     } finally {
       set({ deletingBackupKey: null });
     }
@@ -609,7 +611,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   testBackup: async () => {
     const missing = collectMissingBackupFields(get().config?.backup);
     if (missing) {
-      toast.error(`请先填写${missing}`);
+      toast.error(`Please fill in ${missing} first`);
       return;
     }
     set({ isTestingBackup: true });
@@ -619,9 +621,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         return;
       }
       const data = await testBackupConnection();
-      toast.success(`R2 连接正常（HTTP ${data.result.status}）`);
+      toast.success(`R2 connection OK (HTTP ${data.result.status})`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "测试备份连接失败");
+      toast.error(error instanceof Error ? error.message : "Backup connection test failed");
     } finally {
       set({ isTestingBackup: false });
     }
@@ -633,7 +635,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const data = await fetchRegisterConfig();
       set({ registerConfig: data.register });
     } catch (error) {
-      if (!silent) toast.error(error instanceof Error ? error.message : "加载注册配置失败");
+      if (!silent) toast.error(error instanceof Error ? error.message : "Failed to load registration config");
     } finally {
       if (!silent) set({ isLoadingRegister: false });
     }
@@ -737,9 +739,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         fixed_password: registerConfig.fixed_password,
       });
       set({ registerConfig: data.register });
-      toast.success("注册配置已保存");
+      toast.success("Registration config saved");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存注册配置失败");
+      toast.error(error instanceof Error ? error.message : "Failed to save registration config");
     } finally {
       set({ isSavingRegister: false });
     }
@@ -765,9 +767,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       }
       const data = registerConfig.enabled ? await stopRegister() : await startRegister();
       set({ registerConfig: data.register });
-      toast.success(registerConfig.enabled ? "注册任务已停止" : "注册任务已启动");
+      toast.success(registerConfig.enabled ? "Registration task stopped" : "Registration task started");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "切换注册状态失败");
+      toast.error(error instanceof Error ? error.message : "Failed to toggle registration status");
     } finally {
       set({ isSavingRegister: false });
     }
@@ -778,9 +780,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     try {
       const data = await resetRegisterApi();
       set({ registerConfig: data.register });
-      toast.success("注册统计已重置");
+      toast.success("Registration statistics reset");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "重置注册统计失败");
+      toast.error(error instanceof Error ? error.message : "Failed to reset registration statistics");
     } finally {
       set({ isSavingRegister: false });
     }
@@ -794,7 +796,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       if (registerConfig.enabled && registerConfig.stats?.job_kind === "repair_abnormal") {
         const data = await stopRegister();
         set({ registerConfig: data.register });
-        toast.success("已请求停止异常账号修复");
+        toast.success("Requested to stop abnormal account repair");
         return;
       }
       if (!registerConfig.enabled) {
@@ -812,16 +814,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       }
       const data = await repairAbnormalAccounts();
       set({ registerConfig: data.register });
-      toast.success(registerConfig.enabled ? "已有任务正在运行" : "已启动异常账号修复任务");
+      toast.success(registerConfig.enabled ? "A task is already running" : "Abnormal account repair task started");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "启动异常账号修复失败");
+      toast.error(error instanceof Error ? error.message : "Failed to start abnormal account repair");
     } finally {
       set({ isSavingRegister: false });
     }
   },
 
   loadPools: async (silent = false) => {
-    // 已经加载过 pools 后再切回设置页：静默刷新，不让 CPAPoolsCard 坍缩成 spinner。
+    // After pools have been loaded, navigating back to settings: silent refresh to prevent CPAPoolsCard from collapsing to spinner.
     const effectiveSilent = silent || get().pools.length > 0;
     if (!effectiveSilent) {
       set({ isLoadingPools: true });
@@ -831,7 +833,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       set({ pools: data.pools });
     } catch (error) {
       if (!effectiveSilent) {
-        toast.error(error instanceof Error ? error.message : "加载 CPA 连接失败");
+        toast.error(error instanceof Error ? error.message : "Failed to load CPA connections");
       }
     } finally {
       if (!effectiveSilent) {
@@ -885,11 +887,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   savePool: async () => {
     const { editingPool, formName, formBaseUrl, formSecretKey } = get();
     if (!formBaseUrl.trim()) {
-      toast.error("请输入 CPA 地址");
+      toast.error("Please enter CPA address");
       return;
     }
     if (!editingPool && !formSecretKey.trim()) {
-      toast.error("请输入 Secret Key");
+      toast.error("Please enter Secret Key");
       return;
     }
 
@@ -902,7 +904,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           secret_key: formSecretKey.trim() || undefined,
         });
         set({ pools: data.pools, dialogOpen: false });
-        toast.success("连接已更新");
+        toast.success("Connection updated");
       } else {
         const data = await createCPAPool({
           name: formName.trim(),
@@ -910,10 +912,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           secret_key: formSecretKey.trim(),
         });
         set({ pools: data.pools, dialogOpen: false });
-        toast.success("连接已添加");
+        toast.success("Connection added");
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存失败");
+      toast.error(error instanceof Error ? error.message : "Save failed");
     } finally {
       set({ isSavingPool: false });
     }
@@ -924,9 +926,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     try {
       const data = await deleteCPAPool(pool.id);
       set({ pools: data.pools });
-      toast.success("连接已删除");
+      toast.success("Connection deleted");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除失败");
+      toast.error(error instanceof Error ? error.message : "Delete failed");
     } finally {
       set({ deletingId: null });
     }
@@ -945,9 +947,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         filePage: 1,
         browserOpen: true,
       });
-      toast.success(`读取成功，共 ${files.length} 个远程账号`);
+      toast.success(`Successfully loaded ${files.length} remote accounts`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "读取远程账号失败");
+      toast.error(error instanceof Error ? error.message : "Failed to load remote accounts");
     } finally {
       set({ loadingFilesId: null });
     }
@@ -992,7 +994,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       return;
     }
     if (selectedNames.length === 0) {
-      toast.error("请先选择要导入的账号");
+      toast.error("Please select accounts to import first");
       return;
     }
 
@@ -1005,9 +1007,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ),
         browserOpen: false,
       });
-      toast.success("导入任务已启动");
+      toast.success("Import task started");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "启动导入失败");
+      toast.error(error instanceof Error ? error.message : "Failed to start import");
     } finally {
       set({ isStartingImport: false });
     }

@@ -14,16 +14,16 @@ BASE_URL = "http://localhost:8000"
 
 class ChatCompletionsTests(unittest.TestCase):
     def test_text_completion_http(self):
-        """测试文本对话的非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for text conversation."""
         response = requests.post(
             f"{BASE_URL}/v1/chat/completions",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
             json={
                 "model": "auto",
                 "messages": [
-                    {"role": "user", "content": "你好。"},
-                    {"role": "assistant", "content": "你好，我可以帮助你处理文本和图片相关请求。"},
-                    {"role": "user", "content": "那你再简单介绍一下你自己。"},
+                    {"role": "user", "content": "Hello."},
+                    {"role": "assistant", "content": "Hello, I can help you with text and image requests."},
+                    {"role": "user", "content": "Then please briefly introduce yourself again."},
                 ],
             },
             timeout=300,
@@ -34,7 +34,7 @@ class ChatCompletionsTests(unittest.TestCase):
         print(json.dumps(response.json(), ensure_ascii=False, indent=2))
 
     def test_text_completion_stream_http(self):
-        """测试文本对话的流式 HTTP 调用。"""
+        """Test streaming HTTP call for text conversation."""
         response = requests.post(
             f"{BASE_URL}/v1/chat/completions",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -42,9 +42,9 @@ class ChatCompletionsTests(unittest.TestCase):
                 "model": "auto",
                 "stream": True,
                 "messages": [
-                    {"role": "user", "content": "你好。"},
-                    {"role": "assistant", "content": "你好，我的名字是Claude。"},
-                    {"role": "user", "content": "那你再简单介绍一下你自己，比如你的名字是什么。"},
+                    {"role": "user", "content": "Hello."},
+                    {"role": "assistant", "content": "Hello, my name is Claude."},
+                    {"role": "user", "content": "Then please briefly introduce yourself again, for example, what is your name?"},
                 ],
             },
             stream=True,
@@ -58,14 +58,14 @@ class ChatCompletionsTests(unittest.TestCase):
                 print(line.decode("utf-8", errors="replace"))
 
     def test_image_completion_http(self):
-        """测试图片对话的非流式 HTTP 调用。"""
+        """Test non-streaming HTTP call for image conversation."""
         response = requests.post(
             f"{BASE_URL}/v1/chat/completions",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
             json={
                 "model": "gpt-image-2",
                 "messages": [
-                    {"role": "user", "content": "我想做一张南京城市宣传海报图。"},
+                    {"role": "user", "content": "I want to make a promotional poster for Nanjing city."},
                 ],
                 "n": 1,
             },
@@ -81,7 +81,7 @@ class ChatCompletionsTests(unittest.TestCase):
             print(path)
 
     def test_image_completion_stream_http(self):
-        """测试图片对话的流式 HTTP 调用。"""
+        """Test streaming HTTP call for image conversation."""
         response = requests.post(
             f"{BASE_URL}/v1/chat/completions",
             headers={"Authorization": f"Bearer {AUTH_KEY}"},
@@ -89,7 +89,7 @@ class ChatCompletionsTests(unittest.TestCase):
                 "model": "gpt-image-2",
                 "stream": True,
                 "messages": [
-                    {"role": "user", "content": "我想做一张南京城市宣传海报图。"},
+                    {"role": "user", "content": "I want to make a promotional poster for Nanjing city."},
                 ],
                 "n": 1,
             },

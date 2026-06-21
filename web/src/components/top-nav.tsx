@@ -11,26 +11,26 @@ import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 import { QuotaPopover } from "@/components/quota-popover";
 
 const adminNavItems = [
-  { href: "/chat", label: "对话" },
-  { href: "/image", label: "画图" },
-  { href: "/gallery", label: "画廊" },
-  { href: "/accounts", label: "号池管理" },
-  { href: "/register", label: "注册机" },
-  { href: "/image-manager", label: "图片管理" },
-  { href: "/logs", label: "日志管理" },
-  { href: "/settings", label: "设置" },
-  { href: "/keys", label: "用户密钥" },
+  { href: "/chat", label: "Chat" },
+  { href: "/image", label: "Image" },
+  { href: "/gallery", label: "Gallery" },
+  { href: "/accounts", label: "Accounts" },
+  { href: "/register", label: "Register" },
+  { href: "/image-manager", label: "Image Manager" },
+  { href: "/logs", label: "Logs" },
+  { href: "/settings", label: "Settings" },
+  { href: "/keys", label: "User Keys" },
 ];
 
 const userNavItems = [
-  { href: "/chat", label: "对话" },
-  { href: "/image", label: "画图" },
-  { href: "/works", label: "我的作品" },
-  { href: "/gallery", label: "画廊" },
+  { href: "/chat", label: "Chat" },
+  { href: "/image", label: "Image" },
+  { href: "/works", label: "My Works" },
+  { href: "/gallery", label: "Gallery" },
 ];
 
-// next.config.ts 配了 trailingSlash: true，usePathname 返回 "/image/"，
-// nav item 的 href 是 "/image"，直接 === 永远不命中。统一抹掉尾斜杠再比。
+// next.config.ts has trailingSlash: true, so usePathname returns "/image/",
+// but nav item href is "/image". Strip trailing slash before comparing.
 function normalizePath(value: string) {
   if (!value) return "/";
   const trimmed = value.replace(/\/+$/, "");
@@ -75,13 +75,14 @@ export function TopNav() {
     router.replace("/login");
   };
 
-  // 一根"会滑动的下划线"：默认贴在当前页那项下面，hover 哪项就滑到哪项，
-  // 鼠标离开整条 nav 后回到 active 项。Vercel / Linear / Apple 同套路。
+  // A sliding underline indicator: positioned under the active nav item by default,
+  // slides to whichever item is hovered, returns to active on mouse leave.
+  // Same pattern as Vercel / Linear / Apple.
   const navRef = useRef<HTMLElement | null>(null);
   const itemRefs = useRef<Map<string, HTMLAnchorElement | null>>(new Map());
   const [activeRect, setActiveRect] = useState<Rect | null>(null);
   const [hoverRect, setHoverRect] = useState<Rect | null>(null);
-  // 第一次还没测过位置时不要做 transition，避免下划线从 (0,0) "飞"过来。
+  // Don't transition until initial position is measured, to avoid the underline "flying" in from (0,0).
   const hasInitialPositionRef = useRef(false);
   const [enableTransition, setEnableTransition] = useState(false);
 
@@ -117,8 +118,8 @@ export function TopNav() {
       const r = measure(activeItem.href);
       if (!r) return;
       setActiveRect(r);
-      // 第一次定位完成后，下一帧再开 transition，
-      // 这样初始落点直接 snap，不会有从 0 滑过来的拖影。
+      // After initial positioning is done, enable transition on the next frame,
+      // so the initial snap is instant without a sliding ghost from 0.
       if (!hasInitialPositionRef.current) {
         hasInitialPositionRef.current = true;
         requestAnimationFrame(() => setEnableTransition(true));
@@ -137,14 +138,14 @@ export function TopNav() {
   }
 
   const navItems = session.role === "admin" ? adminNavItems : userNavItems;
-  // 只有一个标签时（普通用户只能进画图）就别渲染导航条了，
-  // 单独一个"画图"挂在中间反而像 placeholder，logo 已经指向 /image 够用了。
+  // When there's only one tab (e.g. regular user can only access image), skip rendering the nav bar.
+  // A single "Image" tab in the middle looks like a placeholder; the logo already links to /image.
   const showNav = navItems.length > 1;
-  const roleLabel = session.role === "admin" ? "管理员" : "普通用户";
+  const roleLabel = session.role === "admin" ? "Admin" : "User";
   const displayName = session.name.trim() || roleLabel;
 
-  // 下划线最终位置：hover 时跟 hover，否则跟 active。两段 padding 内缩 8px，
-  // 让线条比文字略短一点，更精致。
+  // Final indicator position: follows hover when hovering, otherwise follows active.
+  // Inset 8px padding on each side to make the line slightly shorter than the text for refinement.
   const target = hoverRect ?? activeRect;
   const showIndicator = !!target;
   const indicatorLeft = target ? target.left + 8 : 0;
@@ -209,10 +210,10 @@ export function TopNav() {
               </Link>
             );
           })}
-          {/* 单根滑动下划线：跟着 hover/active 平移。
-              用 transform + width 触发 GPU 合成，不用 left；
-              曲线 cubic-bezier(0.32, 0.72, 0, 1) 是 Apple 系常用的"重物缓出"，
-              比线性 ease-out 更"丝滑"，看起来像被吸过去的。 */}
+          {/* Sliding underline indicator: translates with hover/active.
+              Uses transform + width for GPU compositing instead of left;
+              cubic-bezier(0.32, 0.72, 0, 1) is Apple's "heavy ease-out" curve,
+              feels smoother than linear ease-out, like being magnetically pulled. */}
           <span
             aria-hidden
             className="pointer-events-none absolute h-[2px] rounded-full bg-foreground"
@@ -258,7 +259,7 @@ export function TopNav() {
             className="cursor-pointer rounded-md border border-transparent px-2 py-1 text-[13px] font-bold leading-none text-muted-foreground transition hover:border-border/70 hover:bg-card hover:text-foreground"
             onClick={() => void handleLogout()}
           >
-            退出
+            Logout
           </button>
         </div>
       </div>

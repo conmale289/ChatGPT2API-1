@@ -54,8 +54,8 @@ function RegisterPageContent() {
             </span>
             <span className="h-px w-8 bg-border" />
           </div>
-          <h1 className="text-[26px] font-semibold tracking-tight text-foreground">注册机</h1>
-          <p className="text-[13px] text-muted-foreground">通过邮箱临时号自动注册 ChatGPT 账号，实时回写号池。</p>
+          <h1 className="text-[26px] font-semibold tracking-tight text-foreground">Auto Register</h1>
+          <p className="text-[13px] text-muted-foreground">Automatically register ChatGPT accounts via temporary email, with real-time pool writeback.</p>
         </div>
       </section>
       <section>

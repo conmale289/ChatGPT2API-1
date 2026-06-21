@@ -5,15 +5,15 @@ import threading
 
 from services.config import DATA_DIR
 
-# 标记一组 rel 是不是「图生图（image edits）」产出。
-# 单独存 set：图生图的 prompt 是相对参考图的修改指令（"换个浅色版"、"加个帽子"），
-# 离开参考图就是垃圾文本。我们不持久化参考图（占盘且复用率极低），所以发布到
-# 画廊时画廊条目里的"prompt 文本"对其它用户毫无价值——publish 时查这个 set，
-# 命中就把 prompt 强制落空，画廊详情页改为提示"提示词依赖参考图，无法独立复用"。
+# Mark a set of rels as "image edits" (image-to-image) outputs.
+# Saved separately as a set: image-to-image prompts are modification instructions relative to the reference image ("change to light color", "add a hat").
+# Without the reference image, it is useless text. We do not persist reference images (disk space concerns and low reuse rate), so when
+# publishing to the gallery, the prompt text in the gallery entry has no value to other users. Thus, we check this set on publish,
+# and if matched, force the prompt to be empty, while the gallery detail page prompts "Prompt relies on reference image and cannot be reused".
 #
-# 文件结构：{ "rels": ["2026/05/22/abc.png", ...] }
-# 多进程下小概率写丢，但失败也只是 fallback 为"显示原 prompt 文本"，
-# 不致命；下次 publish 仍能正常命中。
+# File structure: { "rels": ["2026/05/22/abc.png", ...] }
+# Minor chance of write loss under multi-process, but failure just falls back to "showing original prompt text",
+# which is non-fatal; the next publish will still match correctly.
 EDITS_FILE = DATA_DIR / "image_edits.json"
 
 _lock = threading.RLock()
@@ -46,7 +46,7 @@ def _save_locked(s: set[str]) -> None:
 
 
 def mark_edits(rels: list[str]) -> None:
-    """把这批 rel 标记为图生图产出。"""
+    """Mark this batch of rels as image edits outputs."""
     cleaned = [r.strip().lstrip("/") for r in rels if r and r.strip()]
     cleaned = [r for r in cleaned if r]
     if not cleaned:
@@ -67,7 +67,7 @@ def is_edit(rel: str) -> bool:
 
 
 def remove_edits(rels: list[str]) -> None:
-    """跟图片删除/清理路径配套使用，避免文件越长越大。"""
+    """Used in conjunction with image deletion/cleanup paths to prevent the file from growing indefinitely."""
     cleaned = {r.strip().lstrip("/") for r in rels if r and r.strip()}
     cleaned.discard("")
     if not cleaned:

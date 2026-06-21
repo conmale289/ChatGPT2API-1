@@ -5,52 +5,52 @@ from typing import Any
 
 
 class StorageBackend(ABC):
-    """抽象存储后端基类"""
+    """Abstract storage backend base class"""
 
     @abstractmethod
     def load_accounts(self) -> list[dict[str, Any]]:
-        """加载所有账号数据"""
+        """Load all account data"""
         pass
 
     @abstractmethod
     def save_accounts(self, accounts: list[dict[str, Any]]) -> None:
-        """保存所有账号数据"""
+        """Save all account data"""
         pass
 
     @abstractmethod
     def load_auth_keys(self) -> list[dict[str, Any]]:
-        """加载所有鉴权密钥数据"""
+        """Load all authentication key data"""
         pass
 
     @abstractmethod
     def save_auth_keys(self, auth_keys: list[dict[str, Any]]) -> None:
-        """保存所有鉴权密钥数据"""
+        """Save all authentication key data"""
         pass
 
     @abstractmethod
     def load_gallery_items(self) -> list[dict[str, Any]]:
-        """加载所有画廊条目"""
+        """Load all gallery items"""
         pass
 
     @abstractmethod
     def save_gallery_items(self, items: list[dict[str, Any]]) -> None:
-        """保存所有画廊条目"""
+        """Save all gallery items"""
         pass
 
     def load_chat_conversations(self) -> list[dict[str, Any]]:
-        """加载所有聊天会话；老后端没实现时返回空，避免启动失败。"""
+        """Load all chat conversations; return empty when the old backend has not implemented this to avoid startup failure."""
         return []
 
     def save_chat_conversations(self, items: list[dict[str, Any]]) -> None:
-        """保存所有聊天会话；默认 noop，子类按需覆盖。"""
+        """Save all chat conversations; default noop, subclasses override as needed."""
         return None
 
     @abstractmethod
     def health_check(self) -> dict[str, Any]:
-        """健康检查，返回存储后端状态"""
+        """Health check, returns storage backend status"""
         pass
 
     @abstractmethod
     def get_backend_info(self) -> dict[str, Any]:
-        """获取存储后端信息"""
+        """Get storage backend information"""
         pass

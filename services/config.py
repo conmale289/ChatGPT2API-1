@@ -122,8 +122,8 @@ def _load_settings() -> LoadedSettings:
     auth_key = _normalize_auth_key(os.getenv("CHATGPT2API_AUTH_KEY") or raw_config.get("auth-key"))
     if _is_invalid_auth_key(auth_key):
         raise ValueError(
-            "❌ auth-key 未设置！\n"
-            "请在环境变量 CHATGPT2API_AUTH_KEY 中设置，或者在 config.json 中填写 auth-key。"
+            "❌ auth-key not set!\n"
+            "Please set it in the environment variable CHATGPT2API_AUTH_KEY, or fill in auth-key in config.json."
         )
 
     try:
@@ -145,11 +145,11 @@ class ConfigStore:
         self._storage_backend: StorageBackend | None = None
         if _is_invalid_auth_key(self.auth_key):
             raise ValueError(
-                "❌ auth-key 未设置！\n"
-                "请按以下任意一种方式解决：\n"
-                "1. 在 Render 的 Environment 变量中添加：\n"
+                "❌ auth-key not set!\n"
+                "Please resolve it using one of the following methods:\n"
+                "1. Add in Render's Environment variables:\n"
                 "   CHATGPT2API_AUTH_KEY = your_real_auth_key\n"
-                "2. 或者在 config.json 中填写：\n"
+                "2. Or fill in config.json:\n"
                 '   "auth-key": "your_real_auth_key"'
             )
 
@@ -183,18 +183,18 @@ class ConfigStore:
 
     @property
     def cleanup_protect_gallery(self) -> bool:
-        """清理图片时是否跳过画廊已发布条目。
-        默认 True：发布到画廊视为用户主动表示"这张图有保留价值"，
-        默删会让画廊瓦片瞬间变成裂图。
-        管理员可以在设置里关掉，回到"按 mtime 一刀切"的旧行为。"""
+        """Whether to skip gallery-published items when cleaning up images.
+        Default True: Publishing to the gallery is treated as the user indicating "this image has retention value".
+        Deleting by default would cause gallery tiles to immediately show broken images.
+        Administrators can turn this off in settings to revert to the old "cut-off by mtime" behavior."""
         return bool(self.data.get("cleanup_protect_gallery", True))
 
     @property
     def cleanup_protect_user_images(self) -> bool:
-        """清理图片时是否跳过 image_owners 里有归属的图（用户「我的作品」）。
-        默认 True：用户在「我的作品」里看到一张图突然消失体感比较糟。
-        匿名 / admin 生成且没归属的图不受这个开关保护，仍然按 mtime 清。
-        管理员可以关掉以释放存储。"""
+        """Whether to skip images with ownership in image_owners when cleaning up images (user's "My Works").
+        Default True: It is a poor experience for users to see an image suddenly disappear from "My Works".
+        Anonymous / admin-generated images with no owner are not protected by this switch and are still cleared by mtime.
+        Administrators can turn this off to release storage."""
         return bool(self.data.get("cleanup_protect_user_images", True))
 
     @property
@@ -261,19 +261,19 @@ class ConfigStore:
 
     def cleanup_old_images(self) -> int:
         cutoff = time.time() - self.image_retention_days * 86400
-        # 收集白名单 rel：开关命中才查，避免无开关时也走两次磁盘 IO
+        # Collect whitelist rel: query only if switch hits to avoid double disk IO when switch is off
         protected: set[str] = set()
         if self.cleanup_protect_gallery:
             try:
-                # 延迟 import 避免 services 间循环引用（gallery_service → config）
+                # Delay import to avoid circular dependency between services (gallery_service -> config)
                 from services.gallery_service import _load_all as _load_gallery_all
                 for it in _load_gallery_all():
                     rel = (it.get("image_rel") or "").strip().lstrip("/")
                     if rel:
                         protected.add(rel)
             except Exception:
-                # 加载失败时按"宁可保守"原则——这一轮不删任何文件，等下次清理
-                # 总好过把已发布画廊条目的 PNG 删掉造成 404
+                # Conservative fallback on load failure: delete no files this round, wait for next cleanup
+                # Rather than deleting the PNG of a published gallery item causing 404
                 return 0
         if self.cleanup_protect_user_images:
             try:
@@ -282,7 +282,7 @@ class ConfigStore:
                 for rel, owner in owners.items():
                     rel_clean = (rel or "").strip().lstrip("/")
                     owner_clean = (owner or "").strip().lower()
-                    # admin / 匿名归属（空字符串）不算"用户作品"，仍按 mtime 清
+                    # admin / anonymous ownership (empty string) are not considered "user works", clean by mtime
                     if rel_clean and owner_clean and owner_clean != "admin" and owner_clean != "__admin__":
                         protected.add(rel_clean)
             except Exception:
@@ -296,7 +296,7 @@ class ConfigStore:
             if path.stat().st_mtime >= cutoff:
                 continue
             if protected:
-                # rel = 相对 images_dir 的 posix 路径，跟 image_rel 落库格式一致
+                # rel = posix path relative to images_dir, consistent with image_rel DB storage format
                 try:
                     rel = path.relative_to(images_root).as_posix()
                 except ValueError:
@@ -363,7 +363,7 @@ class ConfigStore:
         return _normalize_backup_settings(self.data.get("backup"))
 
     def get_storage_backend(self) -> StorageBackend:
-        """获取存储后端实例（单例）"""
+        """Get storage backend instance (singleton)"""
         if self._storage_backend is None:
             from services.storage.factory import create_storage_backend
             self._storage_backend = create_storage_backend(DATA_DIR)

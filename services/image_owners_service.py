@@ -7,11 +7,11 @@ from typing import Any
 
 from services.config import DATA_DIR
 
-# 图片 → 创建者用户密钥 ID 的归属表。
-# 之所以独立放一份 JSON、不和 image_tags 合并：
-#   - tags 是用户/管理员手动打的，owner 是任务成功时由后端写入；语义不同，混在一起后续维护更乱
-#   - 没有 owner 也不影响图片本身正常展示，只是该图筛不出"按用户"
-# 文件结构：{ "<rel>": "<owner_key_id>" }
+# Image -> Creator user key ID ownership map.
+# Stored in a separate JSON rather than merged with image_tags:
+#   - tags are manually added by user/admin, owner is written by backend when task succeeds; semantics are different, merging them complicates future maintenance
+#   - the absence of an owner does not affect normal rendering of the image itself, it just prevents filtering by user
+# File structure: { "<rel>": "<owner_key_id>" }
 OWNERS_FILE = DATA_DIR / "image_owners.json"
 
 _lock = threading.RLock()
@@ -31,7 +31,7 @@ def load_owners() -> dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
-    # 防御：只保留 str → str 形态
+    # Defense: keep only str -> str mapping
     return {str(k): str(v) for k, v in data.items() if isinstance(k, str) and v}
 
 
@@ -105,9 +105,9 @@ def get_owner(image_rel: str) -> str:
 
 
 def owner_counts() -> dict[str, int]:
-    """统计每个 owner 当前拥有的图片数。
-    上层在和 list_images 结果对齐前直接读这里更轻量；要严格匹配文件存在性
-    交给上层。"""
+    """Count the number of images currently owned by each owner.
+    It is more lightweight for the upper layer to read here directly before aligning with list_images results;
+    strict file existence matching is left to the upper layer."""
     counts: dict[str, int] = {}
     for owner in load_owners().values():
         if not owner:
@@ -117,8 +117,8 @@ def owner_counts() -> dict[str, int]:
 
 
 def _extract_rels(data: list[Any]) -> list[str]:
-    """从生成结果 data 列表里把 image url 的 `/images/<rel>` 抠出来。
-    上游可能给绝对 URL 也可能给相对路径，只要包含 `/images/` 都能命中。"""
+    """Extract `/images/<rel>` from the image URL in the output data list.
+    Upstream might provide absolute URLs or relative paths; any containing `/images/` will match."""
     rels: list[str] = []
     for item in data:
         if not isinstance(item, dict):
@@ -136,11 +136,11 @@ def _extract_rels(data: list[Any]) -> list[str]:
     return rels
 
 
-def record_owner_for_result(identity: dict[str, Any] | None, data: Any) -> None:
-    """生成/编辑成功后调用：根据 identity 把生成的图都挂上 owner。
-    - 普通用户：owner = 该用户密钥 id
-    - 管理员：owner = "admin"（旧 auth_key）或具体 admin 密钥 id，下拉里会聚合到"管理员"项
-    - 拿不到 identity / id：什么都不做，那一批图就成孤儿（前端"未归属"桶）
+def record_owner_for_result(identity: Any, data: list[Any] | None) -> None:
+    """Called after successful generation/editing: attach owner to the generated images based on identity.
+    - Standard user: owner = user key ID
+    - Admin: owner = "admin" (legacy auth_key) or specific admin key ID, grouped under "Admin" in dropdowns
+    - No identity/ID found: do nothing, making the batch of images orphans (frontend "Unowned" group)
     """
     if not isinstance(identity, dict) or not isinstance(data, list) or not data:
         return
@@ -153,5 +153,5 @@ def record_owner_for_result(identity: dict[str, Any] | None, data: Any) -> None:
     try:
         set_owners(rels, owner_id)
     except Exception:
-        # 写归属表失败不影响上游接口返回；下次列表时该图就显示为"未归属"
+        # Owner table write failure does not affect upstream response; the image will appear as "Unowned" in subsequent listings
         pass

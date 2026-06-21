@@ -4,16 +4,16 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * 顶部路由进度条 (Vercel / GitHub / YouTube 同款)。
+ * Top route progress bar (same pattern as Vercel / GitHub / YouTube).
  *
- * 工作原理：
- *  - 监听全局 click，命中同源 <a> 链接（且目标 URL 与当前不同）时启动；
- *  - 监听 popstate（浏览器前进/后退）时启动；
- *  - 启动后用 setInterval 缓慢向 90% 蠕动；
- *  - usePathname 变化时收尾到 100% 然后淡出；
- *  - 设置最小可见时长，避免本地路由切换过快导致进度条只闪一下看不到。
+ * How it works:
+ *  - Listens to global click events, starts when a same-origin <a> link is hit (with a different target URL);
+ *  - Listens to popstate (browser back/forward) to start;
+ *  - After starting, uses setInterval to slowly creep toward 90%;
+ *  - When usePathname changes, finishes to 100% then fades out;
+ *  - Enforces a minimum visible duration to prevent the bar from flashing too briefly on fast local navigation.
  *
- * 不依赖第三方包，跟随 --primary 配色 + 蓝色光晕。
+ * No third-party dependencies, follows --primary color scheme + blue glow.
  */
 const MIN_VISIBLE_MS = 400;
 const START_PROGRESS = 25;
@@ -79,16 +79,16 @@ export function RouteProgress() {
       setProgress(100);
       fadeTimer.current = setTimeout(() => {
         setVisible(false);
-        // 进度条彻底淡出后再回到 0，避免下一次启动时出现 100→0 的回拉
+        // Reset to 0 only after the bar has fully faded out, preventing a visible 100→0 snap on next start
         resetTimer.current = setTimeout(() => setProgress(0), 240);
       }, 220);
     }, wait);
   }, []);
 
-  // 同源链接点击时启动。
-  // 注意：Next.js <Link> 内部会调 preventDefault 走客户端路由，
-  // 用 capture 阶段抢在 React 委托 handler 之前拿到事件，
-  // 否则 event.defaultPrevented 已经是 true，逻辑会被绕开。
+  // Start on same-origin link clicks.
+  // Note: Next.js <Link> calls preventDefault internally for client-side routing,
+  // so we use capture phase to intercept before React's delegated handler,
+  // otherwise event.defaultPrevented is already true and the logic gets bypassed.
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (event.button !== 0) return;
@@ -130,14 +130,14 @@ export function RouteProgress() {
     return () => document.removeEventListener("click", onClick, true);
   }, [start]);
 
-  // 浏览器前进/后退
+  // Browser back/forward
   useEffect(() => {
     const onPopState = () => start();
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, [start]);
 
-  // 路径变化时收尾
+  // Finish on pathname change
   useEffect(() => {
     if (lastPathRef.current !== pathname) {
       lastPathRef.current = pathname;
@@ -145,7 +145,7 @@ export function RouteProgress() {
     }
   }, [pathname, finish]);
 
-  // 卸载清理
+  // Cleanup on unmount
   useEffect(() => clearAll, [clearAll]);
 
   return (

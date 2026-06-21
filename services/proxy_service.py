@@ -33,7 +33,7 @@ def test_proxy(url: str, *, timeout: float = 15.0) -> dict:
         return {"ok": False, "status": 0, "latency_ms": 0, "error": "proxy url is required"}
     if not _is_valid_proxy_url(candidate):
         return {"ok": False, "status": 0, "latency_ms": 0, "error": "invalid proxy url"}
-    session = Session(impersonate="edge101", verify=True, proxy=candidate)
+    session = Session(impersonate="chrome131", verify=True, proxy=candidate)
     started = time.perf_counter()
     try:
         response = session.get(

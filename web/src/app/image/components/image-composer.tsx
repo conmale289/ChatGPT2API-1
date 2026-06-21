@@ -19,20 +19,20 @@ const COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8];
 
 type SizeOption = { value: string; label: string; desc: string; w: number; h: number };
 const SIZE_OPTIONS: SizeOption[] = [
-  { value: "", label: "未指定", desc: "由模型自动决定", w: 0, h: 0 },
-  { value: "1:1", label: "1:1", desc: "正方形", w: 22, h: 22 },
-  { value: "16:9", label: "16:9", desc: "横版", w: 28, h: 16 },
-  { value: "4:3", label: "4:3", desc: "横版", w: 24, h: 18 },
-  { value: "3:4", label: "3:4", desc: "竖版", w: 18, h: 24 },
-  { value: "9:16", label: "9:16", desc: "竖版", w: 16, h: 28 },
+  { value: "", label: "Unspecified", desc: "Auto-determined by model", w: 0, h: 0 },
+  { value: "1:1", label: "1:1", desc: "Square", w: 22, h: 22 },
+  { value: "16:9", label: "16:9", desc: "Landscape", w: 28, h: 16 },
+  { value: "4:3", label: "4:3", desc: "Landscape", w: 24, h: 18 },
+  { value: "3:4", label: "3:4", desc: "Portrait", w: 18, h: 24 },
+  { value: "9:16", label: "9:16", desc: "Portrait", w: 16, h: 28 },
 ];
 
 type ResolutionOption = { value: string; label: string; desc: string };
 const RESOLUTION_OPTIONS: ResolutionOption[] = [
-  { value: "", label: "自动", desc: "由上游决定" },
-  { value: "1k", label: "1K", desc: "约 1024px" },
-  { value: "2k", label: "2K", desc: "约 2048px" },
-  { value: "4k", label: "4K", desc: "尽量超清" },
+  { value: "", label: "Auto", desc: "Determined by upstream" },
+  { value: "1k", label: "1K", desc: "~1024px" },
+  { value: "2k", label: "2K", desc: "~2048px" },
+  { value: "4k", label: "4K", desc: "Ultra HD" },
 ];
 
 const TEXTAREA_MIN_HEIGHT = 96;
@@ -192,7 +192,7 @@ export function ImageComposer({
       }
       return false;
     }
-    // Fallback：某些浏览器在 dragenter 阶段无法读 items.type，按 file 类型放行
+    // Fallback: some browsers can't read items.type during dragenter phase, allow file types through
     return Array.from(event.dataTransfer?.types || []).includes("Files");
   };
 
@@ -253,11 +253,11 @@ export function ImageComposer({
           }}
         />
 
-        {/* 缩略图行用 absolute 浮在 composer 输入框正上方，不占文档高度。
-            否则空状态下加参考图会让 composer 区从 ~200px 长到 ~280px，
-            results (flex-1) 被压缩 ~80px，items-center 居中的 hero 文案就被顶上去了。
-            外层 relative 由父级 image-composer wrapper 提供（rounded-[28px] bg-white 那块）。
-            移动端 (sm 以下) 横向滚动；桌面端 sm: 起 flex-wrap。 */}
+        {/* Thumbnail row uses absolute positioning above the composer input, not taking up document height.
+            Otherwise adding reference images in empty state would grow composer area from ~200px to ~280px,
+            results (flex-1) gets compressed by ~80px, items-center centered hero text gets pushed up.
+            Outer relative is provided by parent image-composer wrapper (the rounded-[28px] bg-white block).
+            Mobile (below sm) horizontal scroll; desktop (sm+) flex-wrap. */}
         {referenceImages.length > 0 && !replyTarget ? (
           <div className="pointer-events-none absolute right-1 bottom-full left-1 z-10 sm:right-0 sm:left-0">
             <div className="pointer-events-auto mb-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mb-3 sm:flex-wrap sm:overflow-visible sm:pb-0">
@@ -270,11 +270,11 @@ export function ImageComposer({
                       setLightboxOpen(true);
                     }}
                     className="group size-14 overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 transition hover:border-stone-300 sm:size-16"
-                    aria-label={`预览参考图 ${image.name || index + 1}`}
+                    aria-label={`Preview reference image ${image.name || index + 1}`}
                   >
                     <img
                       src={image.dataUrl}
-                      alt={image.name || `参考图 ${index + 1}`}
+                      alt={image.name || `Reference image ${index + 1}`}
                       className="h-full w-full object-cover"
                     />
                   </button>
@@ -285,7 +285,7 @@ export function ImageComposer({
                       onRemoveReferenceImage(index);
                     }}
                     className="absolute -right-1 -top-1 inline-flex size-5 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
-                    aria-label={`移除参考图 ${image.name || index + 1}`}
+                    aria-label={`Remove reference image ${image.name || index + 1}`}
                   >
                     <X className="size-3" />
                   </button>
@@ -329,9 +329,9 @@ export function ImageComposer({
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 text-[11px] font-medium text-stone-500">
-                    <span>正在回复 AI 的提问</span>
+                    <span>Replying to AI's question</span>
                     <span className="text-stone-300">·</span>
-                    <span className="text-stone-400">无需粘贴原文，模型会自动收到上下文</span>
+                    <span className="text-stone-400">No need to paste original text, model will receive context automatically</span>
                   </div>
                   {replyTarget.aiMessage ? (
                     <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-stone-600 sm:text-[13px]">
@@ -344,7 +344,7 @@ export function ImageComposer({
                     type="button"
                     onClick={onCancelReply}
                     className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-200 hover:text-stone-700"
-                    aria-label="取消回复"
+                    aria-label="Cancel reply"
                   >
                     <X className="size-3.5" />
                   </button>
@@ -358,10 +358,10 @@ export function ImageComposer({
               onPaste={handleTextareaPaste}
               placeholder={
                 replyTarget
-                  ? "输入你的回答…"
+                  ? "Enter your reply…"
                   : referenceImages.length > 0
-                    ? "描述你希望如何修改参考图"
-                    : "输入你想要生成的画面，也可直接粘贴图片"
+                    ? "Describe how you'd like to modify the reference image"
+                    : "Describe the image you want to generate, or paste an image directly"
               }
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -379,15 +379,15 @@ export function ImageComposer({
                     type="button"
                     className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-stone-100 px-3 text-[12px] font-medium text-stone-700 transition hover:bg-stone-200 sm:h-10 sm:gap-2 sm:px-4 sm:text-[13px]"
                     onClick={onPickReferenceImage}
-                    aria-label={referenceImages.length > 0 ? "添加参考图" : "上传参考图"}
+                    aria-label={referenceImages.length > 0 ? "Add reference image" : "Upload reference image"}
                   >
                     <ImagePlus className="size-3.5 sm:size-4" strokeWidth={2} />
-                    <span>{referenceImages.length > 0 ? "添加" : "上传"}</span>
+                    <span>{referenceImages.length > 0 ? "Add" : "Upload"}</span>
                   </button>
                   <span className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-stone-100 px-3 text-[12px] font-medium text-stone-500 sm:h-10 sm:px-3.5 sm:text-[13px]">
-                    <span className="hidden sm:inline">剩余</span>
+                    <span className="hidden sm:inline">Remaining</span>
                     {availableQuota === "∞" ? (
-                      <InfinityIcon className="size-3.5 text-stone-900 sm:size-4" strokeWidth={2.25} aria-label="不限额度" />
+                      <InfinityIcon className="size-3.5 text-stone-900 sm:size-4" strokeWidth={2.25} aria-label="Unlimited quota" />
                     ) : (
                       <span className="font-data tabular-nums text-stone-900">{availableQuota}</span>
                     )}
@@ -414,7 +414,7 @@ export function ImageComposer({
                         setIsCountMenuOpen((open) => !open);
                       }}
                     >
-                      <span className={cn("hidden sm:inline", isCountMenuOpen ? "text-white/70" : "text-stone-500")}>张数</span>
+                      <span className={cn("hidden sm:inline", isCountMenuOpen ? "text-white/70" : "text-stone-500")}>Count</span>
                       <span className="font-data tabular-nums">{parsedCount}</span>
                       <ChevronDown
                         className={cn(
@@ -434,7 +434,7 @@ export function ImageComposer({
                           width: "min(212px, calc(100vw - 2rem))",
                         }}
                       >
-                        <div className="mb-1.5 px-1.5 pt-0.5 text-[11px] font-medium text-stone-400">生成数量</div>
+                        <div className="mb-1.5 px-1.5 pt-0.5 text-[11px] font-medium text-stone-400">Generation count</div>
                         <div className="grid grid-cols-4 gap-1.5">
                           {COUNT_OPTIONS.map((value) => {
                             const active = value === parsedCount;
@@ -483,7 +483,7 @@ export function ImageComposer({
                         setIsSizeMenuOpen((open) => !open);
                       }}
                     >
-                      <span className={cn("hidden sm:inline", isSizeMenuOpen ? "text-white/70" : "text-stone-500")}>比例</span>
+                      <span className={cn("hidden sm:inline", isSizeMenuOpen ? "text-white/70" : "text-stone-500")}>Ratio</span>
                       {selectedSize.value ? (
                         <span
                           className={cn(
@@ -497,7 +497,7 @@ export function ImageComposer({
                           aria-hidden
                         />
                       ) : null}
-                      <span className="font-data tabular-nums">{selectedSize.value || "未指定"}</span>
+                      <span className="font-data tabular-nums">{selectedSize.value || "Unspecified"}</span>
                       <ChevronDown
                         className={cn(
                           "size-3.5 shrink-0 opacity-60 transition",
@@ -516,7 +516,7 @@ export function ImageComposer({
                           width: "min(232px, calc(100vw - 2rem))",
                         }}
                       >
-                        <div className="mb-1 px-2 pt-1 text-[11px] font-medium text-stone-400">画面比例</div>
+                        <div className="mb-1 px-2 pt-1 text-[11px] font-medium text-stone-400">Aspect ratio</div>
                         {SIZE_OPTIONS.map((option) => {
                           const active = option.value === imageSize;
                           return (
@@ -599,7 +599,7 @@ export function ImageComposer({
                         setIsResolutionMenuOpen((open) => !open);
                       }}
                     >
-                      <span className={cn("hidden sm:inline", isResolutionMenuOpen ? "text-white/70" : "text-stone-500")}>清晰度</span>
+                      <span className={cn("hidden sm:inline", isResolutionMenuOpen ? "text-white/70" : "text-stone-500")}>Resolution</span>
                       <span className="font-data tabular-nums">{selectedResolution.label}</span>
                       <ChevronDown
                         className={cn(
@@ -619,7 +619,7 @@ export function ImageComposer({
                           width: "min(220px, calc(100vw - 2rem))",
                         }}
                       >
-                        <div className="mb-1 px-2 pt-1 text-[11px] font-medium text-stone-400">目标清晰度</div>
+                        <div className="mb-1 px-2 pt-1 text-[11px] font-medium text-stone-400">Target resolution</div>
                         {RESOLUTION_OPTIONS.map((option) => {
                           const active = option.value === imageResolution;
                           const disabled = isResolutionDisabled(option.value);
@@ -675,7 +675,7 @@ export function ImageComposer({
                   onClick={() => void onSubmit()}
                   disabled={!prompt.trim()}
                   className="inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-stone-900 text-white shadow-[0_1px_2px_rgba(15,23,42,0.1),0_4px_12px_-2px_rgba(15,23,42,0.2)] transition hover:bg-stone-800 hover:shadow-[0_1px_2px_rgba(15,23,42,0.1),0_8px_20px_-4px_rgba(15,23,42,0.3)] disabled:cursor-not-allowed disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none sm:size-10"
-                  aria-label={referenceImages.length > 0 ? "编辑图片" : "生成图片"}
+                  aria-label={referenceImages.length > 0 ? "Edit image" : "Generate image"}
                 >
                   <ArrowUp className="size-3.5 sm:size-4" />
                 </button>

@@ -24,9 +24,9 @@ export type StoredImage = {
 
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
 
-// 回复上一轮 AI 反问/拒绝时携带的上下文。
-// 只用于在调用图片接口时拼接成模型可见的 prompt，不直接展示给用户。
-// turn.prompt 永远只存用户本人输入的原文。
+// Context carried when replying to a previous AI question/refusal.
+// Only used to compose the model-visible prompt when calling the image API; not displayed directly to the user.
+// turn.prompt always stores only the user's original input.
 export type ImageReplyContext = {
   sourceTurnId: string;
   sourcePrompt: string;

@@ -1,12 +1,13 @@
-"""ChatGPT 网页版下发文本中私有区(PUA)标记的清洗。
+"""Cleaning of Private Use Area (PUA) tags in the ChatGPT web version downstream text.
 
-ChatGPT 返回的文本里嵌有以 U+E200..U+E203 包裹的内部标记，浏览器 UI 渲染成
-卡片/脚注；作为 OpenAI 兼容 API 透传则直接显示为 'entity[...]'、
-'citeturn0search0' 等乱码。本模块负责剥离/转换这些标记，并配合流式增量解析。
+The text returned by ChatGPT contains internal tags wrapped in U+E200..U+E203, which are rendered
+as cards/footnotes in the browser UI; when passed through as an OpenAI-compatible API, they appear
+directly as garbled characters like 'entity[...]' or 'citeturn0search0'. This module is responsible
+for stripping/converting these tags and cooperating with streaming incremental parsing.
 
-两类常见标记：
-- ``\\ue200entity[...]\\ue201``                实体卡片（电影、歌曲、人物等）
-- ``\\ue200cite\\ue202<token>\\ue203...\\ue201`` 搜索引用脚注，URL 来自上游 metadata
+Two common types of tags:
+- ``\\ue200entity[...]\\ue201``                Entity cards (movies, songs, people, etc.)
+- ``\\ue200cite\\ue202<token>\\ue203...\\ue201`` Search citation footnotes, URLs from upstream metadata
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ _TRAILING_PARTIAL_TEXT_TAG = re.compile(r"<(?:/?(?:T(?:e(?:x(?:t)?)?)?)?)?$", re
 
 
 def collect_references(node: Any, references: dict[str, dict[str, Any]]) -> None:
-    """递归扫描事件树，收集 ``matched_text`` 到引用元数据的映射。"""
+    """Recursively scan the event tree to collect mapping from ``matched_text`` to citation metadata."""
     if isinstance(node, dict):
         matched = node.get("matched_text")
         if isinstance(matched, str) and OPEN in matched and matched not in references:
@@ -64,7 +65,7 @@ def collect_references(node: Any, references: dict[str, dict[str, Any]]) -> None
 
 
 def split_stable(text: str) -> str:
-    """截出已闭合的稳定前缀；尾部未闭合的标记保留到下一帧再处理。"""
+    """Cut out the closed stable prefix; unclosed tags at the tail are kept for the next frame."""
     last_open = text.rfind(OPEN)
     last_close = text.rfind(CLOSE)
     if last_open > last_close:
@@ -76,7 +77,7 @@ def split_stable(text: str) -> str:
 
 
 def _render_rich_text_tags(text: str) -> str:
-    """把上游富文本包装转成 Markdown，避免剥标签时丢掉粗体等语义。"""
+    """Convert upstream rich text wrappers into Markdown to avoid losing bold or other semantics when stripping tags."""
     if "<" not in text:
         return text
     out = text
@@ -135,7 +136,7 @@ def sanitize(
     cite_numbers: dict[str, int],
     cite_counter: list[int],
 ) -> str:
-    """对稳定前缀做替换并去掉孤立 PUA 字符；未闭合的标记不动。"""
+    """Replace stable prefixes and remove isolated PUA characters; unclosed tags are left untouched."""
     if not text:
         return text
     stable = split_stable(text)

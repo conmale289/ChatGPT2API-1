@@ -17,9 +17,9 @@ function KeysPageContent() {
             </span>
             <span className="h-px w-8 bg-border" />
           </div>
-          <h1 className="text-[26px] font-semibold tracking-tight text-foreground">用户密钥</h1>
+          <h1 className="text-[26px] font-semibold tracking-tight text-foreground">User Keys</h1>
           <p className="text-[13px] text-muted-foreground">
-            为团队成员分发独立 API key，按画图与对话各自的日 / 月 / 总额度独立计费。
+            Distribute independent API keys to team members, with separate daily / monthly / total quotas for image generation and chat.
           </p>
         </div>
       </section>

@@ -21,8 +21,8 @@ type UseAuthGuardResult = {
 
 export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
   const router = useRouter();
-  // 第一次进站没缓存 → 走 spinner；之后路由切换命中缓存，
-  // 直接同步给出 session、isCheckingAuth=false，避免每页都闪一下加载圈。
+  // On first visit with no cache → show spinner; on subsequent route changes that hit cache,
+  // synchronously provide session with isCheckingAuth=false, avoiding a loading flash on every page.
   const initialCached = hasValidatedAuthSession() ? getCachedAuthSession() : null;
   const initialChecking = !hasValidatedAuthSession();
   const [session, setSession] = useState<StoredAuthSession | null>(initialCached);
@@ -33,7 +33,7 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
     let active = true;
     const roleList = allowedRolesKey ? (allowedRolesKey.split(",") as AuthRole[]) : [];
 
-    // 命中缓存时同步处理一次跳转/角色检查，不动 isCheckingAuth。
+    // On cache hit, synchronously handle redirect/role check without touching isCheckingAuth.
     if (hasValidatedAuthSession()) {
       const cached = getCachedAuthSession();
       if (!cached) {
@@ -43,9 +43,9 @@ export function useAuthGuard(allowedRoles?: AuthRole[]): UseAuthGuardResult {
       }
     }
 
-    // 不论命中与否，都在后台静默重新校验一次：
-    //  - 第一次进站：拿到结果后关掉 spinner、写入 state；
-    //  - 后续切换：仅在结果变化时更新 state，不闪 spinner。
+    // Regardless of cache hit, silently re-validate in the background:
+    //  - First visit: dismiss spinner and write to state once result arrives;
+    //  - Subsequent navigations: only update state if result changed, no spinner flash.
     const load = async () => {
       const storedSession = await getValidatedAuthSession();
       if (!active) return;
@@ -84,7 +84,7 @@ export function useRedirectIfAuthenticated() {
   useEffect(() => {
     let active = true;
 
-    // 命中缓存：已登录则同步跳走。
+    // Cache hit: if already logged in, redirect immediately.
     if (hasValidatedAuthSession()) {
       const cached = getCachedAuthSession();
       if (cached) {

@@ -191,14 +191,14 @@ class ImageTaskService:
             return {"items": items, "missing_ids": missing_ids}
 
     def cancel_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
-        """标记任务为已取消。
+        """Mark tasks as canceled.
 
-        - queued: 直接置为 canceled，工作线程启动时会发现并跳过实际请求
-        - running: 置为 canceled，工作线程会在请求结束后丢弃结果而不写入
-        - 终态(success/error/canceled): 不动
+        - queued: set to canceled directly, the worker thread will skip the request when it starts
+        - running: set to canceled, the worker thread will discard the result instead of writing it when request finishes
+        - terminal state (success/error/canceled): leave untouched
 
-        每条真正被取消（queued / running 翻 canceled）的任务都退还 1 张入口预扣额度。
-        终态条目不退——success 已经出图了不能扣回去，error/canceled 已经退过了。
+        Each truly canceled task (queued / running transition to canceled) refunds 1 pre-deducted entrance quota.
+        Terminal entries are not refunded - success is already generated and cannot be refunded, error/canceled are already refunded.
         """
         owner = _owner_id(identity)
         requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]
@@ -216,28 +216,28 @@ class ImageTaskService:
                     skipped.append(task_id)
                     continue
                 task["status"] = TASK_STATUS_CANCELED
-                task["error"] = "已取消"
+                task["error"] = "Canceled"
                 task["updated_at"] = _now_iso()
                 canceled.append(task_id)
             if canceled:
                 self._save_locked()
-        # 退款放到锁外做：DataStore / DB 写盘期间不持有 self._lock，
-        # 避免与 _run_task 失败分支同时拿锁形成竞态。
+        # Perform refund outside lock: self._lock is not held during DataStore / DB writes,
+        # avoiding race condition with _run_task failure branch attempting to acquire lock simultaneously.
         for _ in canceled:
             self._refund_one(identity)
         return {"canceled": canceled, "skipped": skipped, "missing_ids": missing_ids}
 
     def _refund_one(self, identity: dict[str, object]) -> None:
-        """退还 1 张入口预扣额度。
-        admin / unlimited / 匿名身份内部 noop；普通用户的 used 减 1 不会跌破 0。
-        所有异常吞掉——退款失败不该影响主流程的错误响应。
+        """Refund 1 pre-deducted entrance quota.
+        Internal noop for admin / unlimited / anonymous; standard user used count minus 1 won't drop below 0.
+        Swallow all exceptions - refund failure should not affect main flow's error response.
         """
         role = str(identity.get("role") or "").strip().lower()
         item_id = str(identity.get("id") or "").strip()
         if role == "admin" or not item_id or item_id == "admin":
             return
         try:
-            # 延迟 import 避免 services 间循环引用
+            # Delay import to avoid circular dependency among services
             from services.auth_service import auth_service
             auth_service.refund_quota(item_id, 1)
         except Exception:
@@ -298,7 +298,7 @@ class ImageTaskService:
         identity: dict[str, object],
         model: str,
     ) -> None:
-        # 启动前检查：若任务已被取消，直接结束
+        # Pre-start check: if task is already canceled, exit immediately
         with self._lock:
             task = self._tasks.get(key)
             if task is None or task.get("status") == TASK_STATUS_CANCELED:
@@ -309,7 +309,7 @@ class ImageTaskService:
         try:
             handler = self.edit_handler if mode == "edit" else self.generation_handler
             result = handler(payload)
-            # 请求结束后再检查：若期间被取消，丢弃结果不写回
+            # Post-request check: if task was canceled during request, discard results and do not write back
             with self._lock:
                 task = self._tasks.get(key)
                 if task is None or task.get("status") == TASK_STATUS_CANCELED:
@@ -321,12 +321,12 @@ class ImageTaskService:
                 message = _clean(result.get("message")) or "image task returned no image data"
                 raise RuntimeError(message)
             self._update_task(key, status=TASK_STATUS_SUCCESS, data=data, error="")
-            # 任务真正成功后再写归属表，避免给失败的临时落盘也挂上 owner。
-            # admin / 匿名身份不写，由 record_owner_for_result 内部判断。
+            # Write to ownership map only after task succeeds, avoiding attaching owner to failed temporary disks.
+            # No-op for admin / anonymous, handled internally by record_owner_for_result.
+            # Write prompt text synchronously to be reused by "My Work" page / gallery publish features.
+            # Mark as image edits when mode=="edit"; prompt is cleared on gallery publish -
+            # image edits prompt is relative to reference image and has no reuse value to others without it.
             record_owner_for_result(identity, data)
-            # prompt 文本同步写一份，给"我的作品"页 / 画廊发布功能复用。
-            # mode=="edit" 时标记为图生图，画廊发布时会自动把 prompt 落空——
-            # 图生图的 prompt 是相对参考图的指令，离开参考图对外人没复用价值。
             record_prompt_for_result(
                 payload.get("prompt"), data, is_edit=(mode == "edit")
             )
@@ -335,29 +335,29 @@ class ImageTaskService:
                 mode,
                 model,
                 started,
-                "调用完成",
+                "Call completed",
                 request_preview=request_text(payload.get("prompt")),
                 size=_clean(payload.get("size")),
                 resolution=_clean(payload.get("resolution")),
                 urls=_collect_image_urls(data),
             )
         except Exception as exc:
-            # 请求异常时也要让"已取消"优先，不要把取消覆盖成 error
+            # Prioritize "Canceled" on exceptions, do not overwrite canceled status with error
             with self._lock:
                 task = self._tasks.get(key)
                 if task is not None and task.get("status") == TASK_STATUS_CANCELED:
                     return
             error_message = str(exc) or "image task failed"
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
-            # 上游真失败：退还入口预扣的 1 张额度。
-            # admin / unlimited 在 _refund_one 内部 noop；普通用户的 used 减 1 不会跌破 0。
+            # Genuine upstream failure: refund 1 pre-deducted entrance quota.
+            # admin / unlimited is no-op inside _refund_one; standard user used count minus 1 won't drop below 0.
             self._refund_one(identity)
             self._log_call(
                 identity,
                 mode,
                 model,
                 started,
-                "调用失败",
+                "Call failed",
                 request_preview=request_text(payload.get("prompt")),
                 size=_clean(payload.get("size")),
                 resolution=_clean(payload.get("resolution")),
@@ -381,7 +381,7 @@ class ImageTaskService:
         urls: list[str] | None = None,
     ) -> None:
         endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
-        summary_prefix = "图生图" if mode == "edit" else "文生图"
+        summary_prefix = "Image Edit" if mode == "edit" else "Text-to-Image"
         detail = {
             "key_id": identity.get("id"),
             "key_name": identity.get("name"),
@@ -469,7 +469,7 @@ class ImageTaskService:
         for task in self._tasks.values():
             if task.get("status") in UNFINISHED_STATUSES:
                 task["status"] = TASK_STATUS_ERROR
-                task["error"] = "服务已重启，未完成的图片任务已中断"
+                task["error"] = "Service restarted, unfinished image tasks aborted"
                 task["updated_at"] = _now_iso()
                 changed = True
         return changed

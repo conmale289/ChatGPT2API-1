@@ -38,7 +38,7 @@ def extract_bearer_token(authorization: str | None) -> str:
 def _legacy_admin_identity(token: str) -> dict[str, object] | None:
     auth_key = str(config.auth_key or "").strip()
     if auth_key and token == auth_key:
-        return {"id": "admin", "name": "管理员", "role": "admin"}
+        return {"id": "admin", "name": "Admin", "role": "admin"}
     return None
 
 
@@ -46,7 +46,7 @@ def require_identity(authorization: str | None) -> dict[str, object]:
     token = extract_bearer_token(authorization)
     identity = _legacy_admin_identity(token) or auth_service.authenticate(token)
     if identity is None:
-        raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
+        raise HTTPException(status_code=401, detail={"error": "Invalid or expired key, please log in again"})
     return identity
 
 
@@ -57,7 +57,7 @@ def require_auth_key(authorization: str | None) -> None:
 def require_admin(authorization: str | None) -> dict[str, object]:
     identity = require_identity(authorization)
     if identity.get("role") != "admin":
-        raise HTTPException(status_code=403, detail={"error": "需要管理员权限才能执行这个操作"})
+        raise HTTPException(status_code=403, detail={"error": "Administrator permissions are required to perform this action"})
     return identity
 
 
@@ -101,12 +101,12 @@ def enforce_text_account_policy(identity: dict[str, object], plan_type: str | No
             return None
         normalized = _normalize_plan_type(requested)
         if normalized not in PAID_PLAN_TYPES:
-            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 Plus / Pro 账号"})
+            raise HTTPException(status_code=403, detail={"error": "Current user permissions only allow using Plus / Pro accounts"})
         return normalized
     if not requested:
         return "free"
     if _normalize_plan_type(requested) != "free":
-        raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 free 账号"})
+        raise HTTPException(status_code=403, detail={"error": "Current user permissions only allow using Free accounts"})
     return "free"
 
 
@@ -120,8 +120,8 @@ def text_allowed_plan_types(identity: dict[str, object]) -> tuple[str, ...] | No
 
 
 def apply_image_account_policy(identity: dict[str, object], payload: dict[str, object]) -> dict[str, object]:
-    """按用户密钥等级给画图请求打服务端账号池约束。
-    前端禁用 2K/4K 只是体验；这里才是防 F12 / 直接调接口的硬限制。"""
+    """Apply server-side account pool constraints on image drawing requests based on user key level.
+    Disabling 2K/4K on frontend is only UI experience; this is the hard limit to prevent F12 / direct API calls."""
     allowed = image_allowed_plan_types(identity)
     if allowed is None:
         return payload
@@ -130,43 +130,43 @@ def apply_image_account_policy(identity: dict[str, object], payload: dict[str, o
     requested_plan_type = _normalize_plan_type(payload.get("plan_type"))
     if can_use_paid_image_accounts(identity):
         if requested_plan_type and requested_plan_type not in allowed:
-            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 Plus / Pro 账号"})
+            raise HTTPException(status_code=403, detail={"error": "Current user permissions only allow using Plus / Pro accounts"})
         normalized_model_plan = _normalize_plan_type(model_plan_type)
         if normalized_model_plan and normalized_model_plan not in allowed:
-            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 Plus / Pro 账号"})
+            raise HTTPException(status_code=403, detail={"error": "Current user permissions only allow using Plus / Pro accounts"})
         if requested_plan_type:
             payload["plan_type"] = requested_plan_type
     else:
         if normalize_image_resolution(payload.get("resolution")) in {"2k", "4k"}:
-            raise HTTPException(status_code=403, detail={"error": "当前用户权限不支持 2K/4K 画图"})
+            raise HTTPException(status_code=403, detail={"error": "Current user permissions do not support 2K/4K drawing"})
         if model_plan_type or base_model == "codex-gpt-image-2":
-            raise HTTPException(status_code=403, detail={"error": "当前用户权限只能使用 free 画图账号"})
+            raise HTTPException(status_code=403, detail={"error": "Current user permissions only allow using Free drawing accounts"})
         payload["plan_type"] = "free"
     payload["allowed_plan_types"] = allowed
     return payload
 
 
 def consume_user_quota(identity: dict[str, object], amount: int) -> None:
-    """画图入口处扣减用户密钥的画图额度。admin / image_unlimited 直接放行；
-    普通用户额度不足直接 402，让前端把按钮禁用并提示联系管理员加额度。"""
+    """Deduct drawing quota of user key at the drawing entry. Admins or unlimited users are allowed directly;
+    regular users with insufficient quota get 402 directly, so frontend disables buttons and prompts to contact admin for more quota."""
     role = str(identity.get("role") or "").strip().lower()
     item_id = str(identity.get("id") or "").strip()
     if role == "admin" or not item_id or item_id == "admin":
         return
     result = auth_service.consume_image_quota(item_id, max(1, int(amount or 1)))
     if not result.get("ok"):
-        reason = str(result.get("reason") or "画图额度不足")
+        reason = str(result.get("reason") or "Insufficient drawing quota")
         raise HTTPException(status_code=402, detail={"error": reason})
 
 
 def refund_user_quota(identity: dict[str, object], amount: int) -> None:
-    """画图上游真失败时把预扣的画图额度退回去。
-    与 [consume_user_quota] 对称：admin / image_unlimited 直接 noop。
-
-    调用时机限定在"上游真实失败"分支（content_policy / 5xx / 上游超时 / 任务取消）。
-    用户输入错误（400 / 文本审查不过）走 fail-fast 路径，已经在扣费前就 raise，
-    走不到这里——所以这里不需要再区分原因。
-    任何异常吞掉：退款失败也不该影响错误响应本身。
+    """Refund pre-deducted drawing quota when upstream fails.
+    Symmetric to [consume_user_quota]: admin or unlimited users do direct noop.
+ 
+    Invocation is limited to 'upstream actual failure' branches (content_policy / 5xx / upstream timeout / task cancellation).
+    User input errors (400 / text moderation fail) go down the fail-fast path, which raises before deduction,
+    so it won't reach here -- no need to distinguish reasons here.
+    Any exceptions are swallowed: refund failure should not affect the error response itself.
     """
     role = str(identity.get("role") or "").strip().lower()
     item_id = str(identity.get("id") or "").strip()
@@ -175,26 +175,26 @@ def refund_user_quota(identity: dict[str, object], amount: int) -> None:
     try:
         auth_service.refund_image_quota(item_id, max(1, int(amount or 1)))
     except Exception:
-        # 退款失败也不抛——主流程已经在返回错误响应了，再叠一个错误更糟
+        # Do not throw on refund failure - the main flow is already returning an error response, layering another error would be worse
         pass
 
 
 def consume_user_chat_quota(identity: dict[str, object], amount: int = 1) -> None:
-    """对话入口处扣减用户密钥的对话额度（日 / 月 / 总同时扣）。
-    admin 直接放行；任一档剩余不够直接 402，让前端把发送按钮禁用并提示用户。"""
+    """Deduct conversation quota at the chat entry (deducted from daily/monthly/total simultaneously).
+    Admins are allowed directly; if any category is insufficient, raises 402 directly to let the frontend disable the send button and prompt the user."""
     role = str(identity.get("role") or "").strip().lower()
     item_id = str(identity.get("id") or "").strip()
     if role == "admin" or not item_id or item_id == "admin":
         return
     result = auth_service.consume_chat_quota(item_id, max(1, int(amount or 1)))
     if not result.get("ok"):
-        reason = str(result.get("reason") or "对话额度不足")
+        reason = str(result.get("reason") or "Insufficient chat quota")
         raise HTTPException(status_code=402, detail={"error": reason})
 
 
 def refund_user_chat_quota(identity: dict[str, object], amount: int = 1) -> None:
-    """对话上游真失败（连接失败 / 上游 5xx）时把预扣的对话额度退回去。
-    任何异常吞掉：退款失败不该影响错误响应本身。"""
+    """Refund pre-deducted conversation quota when upstream actually fails (connection fail / upstream 5xx).
+    Any exceptions are swallowed: refund failure should not affect the error response itself."""
     role = str(identity.get("role") or "").strip().lower()
     item_id = str(identity.get("id") or "").strip()
     if role == "admin" or not item_id or item_id == "admin":

@@ -5,7 +5,7 @@ from test.utils import save_image
 
 
 def main() -> None:
-    prompt = "一只橘猫坐在窗台上，午后阳光，写实摄影"
+    prompt = "An orange cat sitting on the windowsill, afternoon sunlight, realistic photography"
     data = openai_v1_image_generations.handle({"prompt": prompt, "model": "gpt-5-3", "n": 1})
     for index, item in enumerate(data["data"], start=1):
         print(save_image(item["b64_json"], f"image_{index}"))

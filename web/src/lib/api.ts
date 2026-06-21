@@ -3,7 +3,7 @@ import webConfig from "@/constants/common-env";
 import { getStoredAuthKey } from "@/store/auth";
 
 export type AccountType = string;
-export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
+export type AccountStatus = "normal" | "rate_limited" | "abnormal" | "disabled";
 export type ImageModel = "gpt-image-2" | "codex-gpt-image-2";
 export type AuthRole = "admin" | "user";
 export type AccountTier = "free" | "premium";
@@ -170,11 +170,11 @@ export type ManagedImage = {
   height?: number;
   tags?: string[];
   owner_id?: string;
-  // 后端在 list_images 里打的标记：true 表示该 owner_id 落在 admin 集合里。
-  // 前端用它把 badge 显示成"管理员"，避免暴露具体 admin 密钥 id。
+  // Flag set by the backend in list_images: true means this owner_id belongs to the admin set.
+  // Frontend uses it to display an "Admin" badge without exposing the actual admin key id.
   is_admin_owner?: boolean;
-  // 生成时记下来的 prompt 原文（image_prompts.json）。老数据为空字符串。
-  // 给"我的作品"页一键复用 / 发布画廊用；为空时前端弹窗手填。
+  // Original prompt text saved during generation (image_prompts.json). Empty string for legacy data.
+  // Used for one-click reuse on "My Works" page / gallery publishing; if empty, frontend prompts manual input.
   prompt?: string;
 };
 
@@ -244,7 +244,8 @@ export type UserKey = {
   account_tier: AccountTier;
   can_use_paid_image_accounts?: boolean;
   can_use_high_resolution?: boolean;
-  // 后端是否仍持有原文密钥；老数据只存 key_hash 时为 false，前端据此切到"重置后回显"流程。
+  // Whether the backend still holds the original plaintext key; false for legacy data that only stores key_hash.
+  // Frontend uses this to switch to the "show after reset" flow.
   key_visible: boolean;
   image_daily_quota: number;
   image_daily_used: number;
@@ -573,10 +574,10 @@ export async function fetchManagedImages(filters: { start_date?: string; end_dat
 }
 
 /**
- * 拉登录用户自己的图。后端按 identity.id 自动过滤 image_owners.json：
- *  - user 角色：只返回 owner == 自己的图
- *  - admin 角色：返回所有 admin 生成的图（owner=__admin__ 桶）
- * 给 web "我的作品" 页用，跟 Android 端 listMyImages 同一接口。
+ * Fetch images belonging to the logged-in user. Backend filters by identity.id from image_owners.json:
+ *  - user role: returns only images owned by self
+ *  - admin role: returns all admin-generated images (owner=__admin__ bucket)
+ * Used by the web "My Works" page, same endpoint as Android's listMyImages.
  */
 export async function fetchMyWorks(filters: { start_date?: string; end_date?: string } = {}) {
   const params = new URLSearchParams();
@@ -976,7 +977,7 @@ export async function testProxy(url?: string) {
   });
 }
 
-/* ───────── 公共画廊 ───────── */
+/* ───────── Public Gallery ───────── */
 
 export type GalleryItem = {
   id: string;
@@ -991,16 +992,16 @@ export type GalleryItem = {
   created_at: number;
   status: "visible" | "hidden" | string;
   /**
-   * 图生图标记。后端在 publish 时检测 image_edits set，命中就强制把 prompt
-   * 落空并置 is_edit=true。前端据此把 prompt 区换成"提示词依赖参考图"提示卡，
-   * 避免别人复制了一段对参考图的修改指令以为能复现，结果完全跑偏。
+   * Image-to-image edit flag. Backend detects image_edits set on publish, forces prompt to empty
+   * and sets is_edit=true. Frontend replaces the prompt section with a "prompt depends on reference image"
+   * notice, preventing users from copying an edit instruction thinking it will reproduce standalone.
    */
   is_edit?: boolean;
   /**
-   * 后端 _public_view 派生：当前请求者是否就是这条画廊的发布者。
-   * 用于在画廊详情里给「我的发布」额外暴露撤回入口；admin 不依赖这个字段，
-   * 走自己那套 hide/unhide/permanent delete 流程。
-   * 后端只在 viewer_id 非空且与 publisher_id 一致时才置 true，绝不暴露 publisher_id 本身。
+   * Derived from backend _public_view: whether the current requester is the publisher of this gallery item.
+   * Used to expose a "withdraw" action in gallery detail for "My Publications"; admin doesn't rely on this,
+   * using their own hide/unhide/permanent delete flow instead.
+   * Backend only sets true when viewer_id is non-empty and matches publisher_id; never exposes publisher_id itself.
    */
   is_mine?: boolean;
 };
@@ -1041,13 +1042,14 @@ export async function publishGalleryItem(body: {
 }
 
 /**
- * 批量查"哪些 rel 发过画廊"。给"我的作品"页 / admin 图片管理页 reload 时
- * 一次播种 publishStates，否则刷新后角标会丢（state 是前端 Map，重 mount 即清空）。
+ * Batch check "which rels have been published to gallery". Used by "My Works" / admin image manager
+ * on reload to seed publishStates in one call, otherwise badges disappear after refresh
+ * (state is a frontend Map, cleared on re-mount).
  *
- * 后端只返回查到记录的 rel，未发布的 rel 不在 items key 里。
+ * Backend only returns rels that have records; unpublished rels are absent from items key.
  *
- * admin 调用时后端自动按 check_any_publisher=True 跨用户查询，并在每条记录
- * 附带 publisher_name；普通 user 查到的永远是自己发的，publisher_name 也会填。
+ * When called by admin, backend automatically queries cross-user with check_any_publisher=True,
+ * attaching publisher_name to each record; regular users always see only their own, with publisher_name filled too.
  */
 export async function getMyPublishedBatch(image_rels: string[]) {
   return httpRequest<{
@@ -1130,10 +1132,10 @@ export async function deleteChatConversation(conversationId: string) {
 }
 
 /**
- * /api/chat/stream 直读：fetch + ReadableStream 解 SSE。
- * 不走 axios 是因为 axios 默认全量缓冲，没法做流式增量渲染。
- * 调用方拿到 AsyncIterable<ChatStreamEvent>，按事件类型自己派发。
- * abortSignal 透传：用户按"停止生成"时上层 controller.abort() 即可。
+ * Direct read from /api/chat/stream: fetch + ReadableStream to parse SSE.
+ * Not using axios because it buffers the entire response, preventing incremental streaming render.
+ * Caller receives AsyncIterable<ChatStreamEvent> and dispatches by event type.
+ * abortSignal pass-through: caller invokes controller.abort() when user clicks "Stop generating".
  */
 export async function* streamChat(
   body: {
@@ -1157,14 +1159,14 @@ export async function* streamChat(
     signal: abortSignal,
   });
   if (!response.ok || !response.body) {
-    let message = `请求失败 (${response.status})`;
+    let message = `Request failed (${response.status})`;
     try {
       const payload = await response.json();
       const detail = payload?.detail ?? payload?.error ?? payload?.message;
       if (typeof detail === "string" && detail.trim()) message = detail;
       else if (detail && typeof detail === "object" && typeof detail.error === "string") message = detail.error;
     } catch {
-      // 非 JSON 错误体走默认 message
+      // Non-JSON error body, use default message
     }
     throw new Error(message);
   }
@@ -1176,7 +1178,7 @@ export async function* streamChat(
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      // SSE 用空行分帧；data: 行可能跨 chunk 到达，所以攒到双换行再切。
+      // SSE frames are separated by double newlines; data: lines may arrive across chunks, so buffer until double newline.
       let separator = buffer.indexOf("\n\n");
       while (separator >= 0) {
         const frame = buffer.slice(0, separator);
@@ -1188,7 +1190,7 @@ export async function* streamChat(
             try {
               yield JSON.parse(raw) as ChatStreamEvent;
             } catch {
-              // 异常 payload 跳过即可，正常流不会落到这里
+              // Skip malformed payload; normal flow shouldn't reach here
             }
           }
         }

@@ -63,8 +63,8 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-// 模块级缓存：组件在路由切换里会被反复 mount，命中缓存直接给出已有 items，
-// 避免每次设置页打开都从 isLoading=true / items=[] 起跳让卡片塌缩成 spinner。
+// Module-level cache: the component re-mounts on route changes; hitting cache provides existing items,
+// preventing the card from collapsing to a spinner starting from isLoading=true / items=[] every time settings page opens.
 let cachedItems: UserKey[] | null = null;
 
 type ImageQuotaKind = "image_daily" | "image_monthly" | "image_total";
@@ -114,9 +114,9 @@ type QuotaResetPayloadKey = keyof Pick<
 const IMAGE_QUOTA_KINDS: QuotaMeta[] = [
   {
     kind: "image_daily",
-    label: "画图日限额",
-    shortLabel: "日",
-    hint: "每日 00:00 自动重置",
+    label: "Image Daily Quota",
+    shortLabel: "D",
+    hint: "Auto-resets daily at 00:00",
     icon: CalendarDays,
     quotaField: "image_daily_quota",
     usedField: "image_daily_used",
@@ -128,9 +128,9 @@ const IMAGE_QUOTA_KINDS: QuotaMeta[] = [
   },
   {
     kind: "image_monthly",
-    label: "画图月限额",
-    shortLabel: "月",
-    hint: "每月 1 号 00:00 自动重置",
+    label: "Image Monthly Quota",
+    shortLabel: "M",
+    hint: "Auto-resets on the 1st of each month at 00:00",
     icon: CalendarClock,
     quotaField: "image_monthly_quota",
     usedField: "image_monthly_used",
@@ -142,9 +142,9 @@ const IMAGE_QUOTA_KINDS: QuotaMeta[] = [
   },
   {
     kind: "image_total",
-    label: "画图总额度",
-    shortLabel: "总",
-    hint: "永久计数，需管理员追加",
+    label: "Image Total Quota",
+    shortLabel: "T",
+    hint: "Permanent count, requires admin to add more",
     icon: ImageIcon,
     quotaField: "image_total_quota",
     usedField: "image_total_used",
@@ -159,9 +159,9 @@ const IMAGE_QUOTA_KINDS: QuotaMeta[] = [
 const CHAT_QUOTA_KINDS: QuotaMeta[] = [
   {
     kind: "chat_daily",
-    label: "对话日限额",
-    shortLabel: "日",
-    hint: "每日 00:00 自动重置",
+    label: "Chat Daily Quota",
+    shortLabel: "D",
+    hint: "Auto-resets daily at 00:00",
     icon: CalendarDays,
     quotaField: "chat_daily_quota",
     usedField: "chat_daily_used",
@@ -173,9 +173,9 @@ const CHAT_QUOTA_KINDS: QuotaMeta[] = [
   },
   {
     kind: "chat_monthly",
-    label: "对话月限额",
-    shortLabel: "月",
-    hint: "每月 1 号 00:00 自动重置",
+    label: "Chat Monthly Quota",
+    shortLabel: "M",
+    hint: "Auto-resets on the 1st of each month at 00:00",
     icon: CalendarClock,
     quotaField: "chat_monthly_quota",
     usedField: "chat_monthly_used",
@@ -187,9 +187,9 @@ const CHAT_QUOTA_KINDS: QuotaMeta[] = [
   },
   {
     kind: "chat_total",
-    label: "对话总额度",
-    shortLabel: "总",
-    hint: "永久计数，需管理员追加",
+    label: "Chat Total Quota",
+    shortLabel: "T",
+    hint: "Permanent count, requires admin to add more",
     icon: MessageSquare,
     quotaField: "chat_total_quota",
     usedField: "chat_total_used",
@@ -235,19 +235,19 @@ function buildEditForm(item: UserKey): EditFormState {
 
 function validateQuotaHierarchy(values: QuotaValidationState): string | null {
   const checks: Array<[QuotaKind, QuotaKind, string, string]> = [
-    ["image_daily", "image_monthly", "画图日限额", "画图月限额"],
-    ["image_daily", "image_total", "画图日限额", "画图总额度"],
-    ["image_monthly", "image_total", "画图月限额", "画图总额度"],
-    ["chat_daily", "chat_monthly", "对话日限额", "对话月限额"],
-    ["chat_daily", "chat_total", "对话日限额", "对话总额度"],
-    ["chat_monthly", "chat_total", "对话月限额", "对话总额度"],
+    ["image_daily", "image_monthly", "Image Daily Quota", "Image Monthly Quota"],
+    ["image_daily", "image_total", "Image Daily Quota", "Image Total Quota"],
+    ["image_monthly", "image_total", "Image Monthly Quota", "Image Total Quota"],
+    ["chat_daily", "chat_monthly", "Chat Daily Quota", "Chat Monthly Quota"],
+    ["chat_daily", "chat_total", "Chat Daily Quota", "Chat Total Quota"],
+    ["chat_monthly", "chat_total", "Chat Monthly Quota", "Chat Total Quota"],
   ];
   for (const [smaller, larger, smallerLabel, largerLabel] of checks) {
     const smallerConf = values[smaller];
     const largerConf = values[larger];
     if (smallerConf.unlimited || largerConf.unlimited) continue;
     if (smallerConf.quota > largerConf.quota) {
-      return `${smallerLabel}不能大于${largerLabel}`;
+      return `${smallerLabel} cannot exceed ${largerLabel}`;
     }
   }
   return null;
@@ -257,7 +257,7 @@ function formatDateTime(value?: string | null) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -273,20 +273,20 @@ function readNumber(value: unknown): number {
 async function copyToClipboard(value: string) {
   try {
     await navigator.clipboard.writeText(value);
-    toast.success("已复制到剪贴板");
+    toast.success("Copied to clipboard");
   } catch {
-    toast.error("复制失败，请手动复制");
+    toast.error("Copy failed, please copy manually");
   }
 }
 
 const PAGE_SIZE_OPTIONS = ["10", "20", "50", "100"] as const;
 const ACCOUNT_TIER_OPTIONS: Array<{ value: AccountTier; label: string; hint: string }> = [
-  { value: "free", label: "普通", hint: "仅使用 free 账号" },
-  { value: "premium", label: "高级", hint: "可使用 Plus / Pro" },
+  { value: "free", label: "Standard", hint: "Uses free accounts only" },
+  { value: "premium", label: "Premium", hint: "Can use Plus / Pro" },
 ];
 
 function accountTierLabel(value?: string) {
-  return value === "premium" ? "高级" : "普通";
+  return value === "premium" ? "Premium" : "Standard";
 }
 
 export function UserKeysCard() {
@@ -324,7 +324,7 @@ export function UserKeysCard() {
       const data = await fetchUserKeys();
       setItems(data.items);
     } catch (error) {
-      if (!silent) toast.error(error instanceof Error ? error.message : "加载用户密钥失败");
+      if (!silent) toast.error(error instanceof Error ? error.message : "Failed to load user keys");
     } finally {
       if (!silent) setIsLoading(false);
     }
@@ -333,14 +333,14 @@ export function UserKeysCard() {
   useEffect(() => {
     if (didLoadRef.current) return;
     didLoadRef.current = true;
-    // 命中缓存时静默后台刷新，避免闪烁；首次进入则 spinner。
-    // load 是组件作用域里每次渲染都会重建的闭包，但只在 mount 跑一次，
-    // 这里有意省略依赖，用 ref 自守保证只跑一次。
+    // Silently refresh in background when cache is hit, avoiding flicker; show spinner on first visit.
+    // load is a closure rebuilt on each render within the component scope, but only runs once on mount.
+    // Intentionally omitting dependencies here, using ref to ensure it only runs once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     void load(cachedItems !== null);
   }, []);
 
-  // 搜索防抖：250ms 比较接近 SaaS 表格的体感最佳值，再短会让长名输入抖动一次。
+  // Search debounce: 250ms is close to the optimal feel for SaaS tables; shorter would cause flickering during long name input.
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim().toLowerCase()), 250);
     return () => clearTimeout(timer);
@@ -377,13 +377,13 @@ export function UserKeysCard() {
   };
 
   const handleCreate = async () => {
-    // 至少一档可用：要么不限，要么 quota>0；否则用户拿到一把"什么都干不了"的钥匙没意义。
+    // At least one tier must be usable: either unlimited or quota > 0; otherwise the user gets a key that "can do nothing".
     const hasAnyUsable = ALL_QUOTA_KINDS.some((meta) => {
       const conf = createForm[meta.kind];
       return conf.unlimited || readNumber(conf.quota) > 0;
     });
     if (!hasAnyUsable) {
-      toast.error("请至少为画图或对话开启一个可用额度");
+      toast.error("Please enable at least one usable quota for image or chat");
       return;
     }
     const nextQuotaState = ALL_QUOTA_KINDS.reduce<QuotaValidationState>((acc, meta) => {
@@ -418,9 +418,9 @@ export function UserKeysCard() {
       setAccountTier("free");
       setCreateForm(defaultCreateForm());
       setIsDialogOpen(false);
-      toast.success("用户密钥已创建");
+      toast.success("User key created");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "创建用户密钥失败");
+      toast.error(error instanceof Error ? error.message : "Failed to create user key");
     } finally {
       setIsCreating(false);
     }
@@ -440,9 +440,9 @@ export function UserKeysCard() {
     try {
       const data = await updateUserKey(item.id, { enabled: !item.enabled });
       setItems(data.items);
-      toast.success(item.enabled ? "用户密钥已禁用" : "用户密钥已启用");
+      toast.success(item.enabled ? "User key disabled" : "User key enabled");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新用户密钥失败");
+      toast.error(error instanceof Error ? error.message : "Failed to update user key");
     } finally {
       setItemPending(item.id, false);
     }
@@ -456,9 +456,9 @@ export function UserKeysCard() {
       const data = await deleteUserKey(item.id);
       setItems(data.items);
       setDeletingItem(null);
-      toast.success("用户密钥已删除");
+      toast.success("User key deleted");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除用户密钥失败");
+      toast.error(error instanceof Error ? error.message : "Failed to delete user key");
     } finally {
       setItemPending(item.id, false);
     }
@@ -499,7 +499,7 @@ export function UserKeysCard() {
       };
       return acc;
     }, {} as QuotaValidationState);
-    // 取消"不限额"但没填新值的字段：聚合后统一报错，避免用户额度被静默改成 0。
+    // Aggregate fields where "unlimited" was unchecked but no new value was provided: report error uniformly to avoid silently setting quota to 0.
     const missingValueLabels: string[] = [];
     for (const meta of ALL_QUOTA_KINDS) {
       const conf = editForm[meta.kind];
@@ -508,14 +508,14 @@ export function UserKeysCard() {
       const inputRaw = conf.quota.trim();
       const inputNum = inputRaw === "" ? 0 : readNumber(inputRaw);
 
-      // 计算保存后的最终 quota：unlimited 档语义上 quota 不参与判断，统一记 0；
-      // 否则根据 add / set 模式 + 是否填值，落到具体 quota 数。
-      // 这一层的语义重点是"只看保存后是不是真的变了"，避免覆盖模式下输入与当前值相同也被判作改动而误丢弃。
+      // Calculate the final quota after save: for unlimited tiers, quota is semantically irrelevant, unified as 0;
+      // otherwise based on add / set mode + whether a value was entered, resolve to specific quota number.
+      // The key semantic here is "only check if the saved result actually changed", avoiding false positives in set mode when input equals current value.
       const nextUnlimited = conf.unlimited;
       let nextQuota = currentQuota;
       if (!conf.unlimited) {
         if (inputRaw === "") {
-          // 留空：跟随当前；只有从不限切到限额且没填值才需要警告。
+          // Empty: keep current; only warn when switching from unlimited to limited without a value.
           nextQuota = currentQuota;
         } else if (conf.mode === "add") {
           nextQuota = Math.max(0, currentQuota + inputNum);
@@ -529,12 +529,12 @@ export function UserKeysCard() {
       };
 
       if (nextUnlimited && !currentUnlimited) {
-        // 切到不限：明确发 unlimited=true；quota 由后端忽略，不需要再发。
+        // Switch to unlimited: explicitly send unlimited=true; quota is ignored by backend, no need to send.
         view[meta.unlimitedPayload] = true;
         quotaTouched = true;
         quotaConfigTouched = true;
       } else if (!nextUnlimited && currentUnlimited) {
-        // 切到限额：必须给一个 > 0 的具体值，否则用户拿到的是 0 额度，立刻不可用。
+        // Switch to limited: must provide a specific value > 0, otherwise user gets 0 quota, immediately unusable.
         if (inputRaw === "" || nextQuota <= 0) {
           missingValueLabels.push(meta.label);
           continue;
@@ -544,7 +544,7 @@ export function UserKeysCard() {
         quotaTouched = true;
         quotaConfigTouched = true;
       } else if (!nextUnlimited && nextQuota !== currentQuota) {
-        // 同样限额、quota 真的变了才发；覆盖模式下输入与当前值相同会落到这里被忽略，符合预期。
+        // Same limited mode, quota actually changed; in set mode if input equals current value it falls through here and is ignored, as expected.
         view[meta.quotaPayload] = nextQuota;
         quotaTouched = true;
         quotaConfigTouched = true;
@@ -557,7 +557,7 @@ export function UserKeysCard() {
     }
 
     if (missingValueLabels.length > 0) {
-      toast.error(`${missingValueLabels.join("、")}：取消「不限额」时必须填一个大于 0 的额度`);
+      toast.error(`${missingValueLabels.join(", ")}: a value greater than 0 is required when disabling "Unlimited"`);
       return;
     }
     if (quotaConfigTouched) {
@@ -569,8 +569,8 @@ export function UserKeysCard() {
     }
 
     if (!payload.name && !payload.key && !payload.account_tier && !quotaTouched) {
-      // 真没改任何东西：静默关闭，不打扰用户。
-      // 上面如果只是覆盖模式输入了与当前值相同的数字，也会落到这里——这是预期行为。
+      // Nothing actually changed: silently close without disturbing the user.
+      // If set mode input matched the current value, it also falls here—this is expected behavior.
       closeEditDialog();
       return;
     }
@@ -580,9 +580,9 @@ export function UserKeysCard() {
       const data = await updateUserKey(item.id, payload);
       setItems(data.items);
       closeEditDialog();
-      toast.success("用户密钥已更新");
+      toast.success("User key updated");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新用户密钥失败");
+      toast.error(error instanceof Error ? error.message : "Failed to update user key");
     } finally {
       setItemPending(item.id, false);
     }
@@ -602,9 +602,9 @@ export function UserKeysCard() {
                 <KeyRound className="size-5 text-stone-600" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold tracking-tight">用户密钥管理</h2>
+                <h2 className="text-lg font-semibold tracking-tight">User Key Management</h2>
                 <p className="text-sm text-stone-500">
-                  画图与对话各自支持日限额、月限额、总额度三档；任一档可独立勾选「不限额」。
+                  Image and chat each support daily, monthly, and total quotas; each tier can independently select "Unlimited".
                 </p>
               </div>
             </div>
@@ -615,10 +615,10 @@ export function UserKeysCard() {
                   value={query}
                   onChange={(event) => {
                     setQuery(event.target.value);
-                    // 搜索条件改变即回到首页，避免在第 N 页搜出 1 条结果只能看到空白。
+                    // Reset to first page when search criteria change, to avoid seeing a blank page when results are on page 1.
                     setPage(1);
                   }}
-                  placeholder="按名称搜索"
+                  placeholder="Search by name"
                   className="h-9 w-full rounded-xl border-stone-200 bg-white/85 pl-10"
                 />
               </div>
@@ -627,14 +627,14 @@ export function UserKeysCard() {
                 onClick={() => setIsDialogOpen(true)}
               >
                 <Plus className="size-4" />
-                创建用户密钥
+                Create User Key
               </Button>
             </div>
           </div>
 
           {revealedKey ? (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
-              <div className="font-medium">新密钥仅展示一次，请立即保存：</div>
+              <div className="font-medium">New key is shown only once, please save it immediately:</div>
               <div className="mt-3 flex flex-col gap-3 rounded-lg border border-emerald-200 bg-white/80 p-3 md:flex-row md:items-center md:justify-between">
                 <code className="break-all font-mono text-[13px]">{revealedKey}</code>
                 <Button
@@ -644,7 +644,7 @@ export function UserKeysCard() {
                   onClick={() => void handleCopy(revealedKey)}
                 >
                   <Copy className="size-4" />
-                  复制
+                  Copy
                 </Button>
               </div>
             </div>
@@ -661,13 +661,13 @@ export function UserKeysCard() {
                   <table className="w-full min-w-[1040px] text-left">
                     <thead className="border-b border-stone-200 bg-stone-50 text-[12px] font-medium text-stone-500">
                       <tr>
-                        <th className="w-56 px-4 py-2.5 font-medium">名称</th>
-                        <th className="w-24 px-4 py-2.5 font-medium">状态</th>
-                        <th className="w-72 px-4 py-2.5 font-medium">画图额度</th>
-                        <th className="w-72 px-4 py-2.5 font-medium">对话额度</th>
-                        <th className="w-36 px-4 py-2.5 font-medium">创建时间</th>
-                        <th className="w-36 px-4 py-2.5 font-medium">最近使用</th>
-                        <th className="w-32 px-4 py-2.5 text-right font-medium">操作</th>
+                        <th className="w-56 px-4 py-2.5 font-medium">Name</th>
+                        <th className="w-24 px-4 py-2.5 font-medium">Status</th>
+                        <th className="w-72 px-4 py-2.5 font-medium">Image Quota</th>
+                        <th className="w-72 px-4 py-2.5 font-medium">Chat Quota</th>
+                        <th className="w-36 px-4 py-2.5 font-medium">Created</th>
+                        <th className="w-36 px-4 py-2.5 font-medium">Last Used</th>
+                        <th className="w-32 px-4 py-2.5 text-right font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -696,12 +696,12 @@ export function UserKeysCard() {
                     </div>
                     <div className="space-y-1">
                       <p className="text-sm font-medium text-stone-700">
-                        {debouncedQuery ? "没有匹配的密钥" : "暂无普通用户密钥"}
+                        {debouncedQuery ? "No matching keys" : "No user keys yet"}
                       </p>
                       <p className="text-sm text-stone-500">
                         {debouncedQuery
-                          ? "调整搜索关键字后重试。"
-                          : "点击右上角按钮即可创建并分发给其他人。"}
+                          ? "Adjust your search keywords and try again."
+                          : "Click the button in the top-right corner to create and distribute keys."}
                       </p>
                     </div>
                   </div>
@@ -709,16 +709,16 @@ export function UserKeysCard() {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 px-4 py-3">
                   <div className="text-sm text-stone-500">
-                    显示第 {filteredItems.length === 0 ? 0 : startIndex + 1} -{" "}
-                    {Math.min(startIndex + Number(pageSize), filteredItems.length)} 条，共{" "}
-                    {filteredItems.length} 条
+                    Showing {filteredItems.length === 0 ? 0 : startIndex + 1} -{" "}
+                    {Math.min(startIndex + Number(pageSize), filteredItems.length)} of{" "}
+                    {filteredItems.length} items
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Select
                       value={pageSize}
                       onValueChange={(value) => {
                         setPageSize(value as (typeof PAGE_SIZE_OPTIONS)[number]);
-                        // 切换页大小后第 N 页可能不存在，统一回到第 1 页。
+                        // Page N may not exist after changing page size, reset to page 1.
                         setPage(1);
                       }}
                     >
@@ -728,7 +728,7 @@ export function UserKeysCard() {
                       <SelectContent>
                         {PAGE_SIZE_OPTIONS.map((option) => (
                           <SelectItem key={option} value={option}>
-                            {option} / 页
+                            {option} / page
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -799,9 +799,9 @@ export function UserKeysCard() {
                 <KeyRound className="size-5" />
               </div>
               <div className="min-w-0">
-                <DialogTitle className="text-[22px] leading-7">创建用户密钥</DialogTitle>
+                <DialogTitle className="text-[22px] leading-7">Create User Key</DialogTitle>
                 <DialogDescription className="mt-1 max-w-2xl text-sm leading-6 text-stone-500">
-                  配置用户身份、账号权限与独立额度。创建后会生成一条只能查看一次的原始密钥。
+                  Configure user identity, account permissions, and independent quotas. A raw key shown only once will be generated after creation.
                 </DialogDescription>
               </div>
             </div>
@@ -809,42 +809,42 @@ export function UserKeysCard() {
           <div className="max-h-[calc(90vh-154px)] overflow-y-auto px-6 py-5 sm:px-7">
             <div className="space-y-5">
               <section className="space-y-4">
-                <SectionHeading title="密钥档案" hint="名称用于后台识别；自定义密钥留空时自动生成。" />
+                <SectionHeading title="Key Profile" hint="Name is for internal identification; leave custom key empty for auto-generation." />
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
                   <div className="space-y-2">
-                    <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">名称</label>
+                    <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">Name</label>
                     <Input
                       value={name}
                       onChange={(event) => setName(event.target.value)}
-                      placeholder="例如：设计同学 A、运营临时账号"
+                      placeholder="e.g. Designer A, Ops temporary account"
                       className="h-12 rounded-2xl border-stone-200 bg-white shadow-none"
                     />
                   </div>
                   <AccountTierSelect value={accountTier} onChange={setAccountTier} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">自定义密钥</label>
+                  <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">Custom Key</label>
                   <Input
                     value={customKey}
                     onChange={(event) => setCustomKey(event.target.value)}
-                    placeholder="留空则自动生成，例如：sk-your-custom-user-key"
+                    placeholder="Leave empty for auto-generation, e.g. sk-your-custom-user-key"
                     className="h-12 rounded-2xl border-stone-200 bg-white font-mono text-[13px] shadow-none"
                   />
                   <p className="text-xs leading-5 text-stone-500">
-                    填写后以该值创建；不能与管理员密钥或其他用户密钥重复。
+                    Will be created with this value; cannot duplicate admin keys or other user keys.
                   </p>
                 </div>
               </section>
               <QuotaGroupCreate
-                title="画图额度"
-                groupHint="与画图工作台、/v1/images/* 共享。"
+                title="Image Quota"
+                groupHint="Shared with the image workbench and /v1/images/*."
                 kinds={IMAGE_QUOTA_KINDS}
                 form={createForm}
                 onChange={updateCreateField}
               />
               <QuotaGroupCreate
-                title="对话额度"
-                groupHint="POST /api/chat/stream 每次请求扣 1。"
+                title="Chat Quota"
+                groupHint="Each POST /api/chat/stream request deducts 1."
                 kinds={CHAT_QUOTA_KINDS}
                 form={createForm}
                 onChange={updateCreateField}
@@ -859,7 +859,7 @@ export function UserKeysCard() {
               onClick={() => setIsDialogOpen(false)}
               disabled={isCreating}
             >
-              取消
+              Cancel
             </Button>
             <Button
               type="button"
@@ -868,7 +868,7 @@ export function UserKeysCard() {
               disabled={isCreating}
             >
               {isCreating ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
-              创建
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -877,9 +877,9 @@ export function UserKeysCard() {
       <Dialog open={Boolean(deletingItem)} onOpenChange={(open) => (!open ? setDeletingItem(null) : null)}>
         <DialogContent className="rounded-2xl p-6">
           <DialogHeader className="gap-2">
-            <DialogTitle>删除用户密钥</DialogTitle>
+            <DialogTitle>Delete User Key</DialogTitle>
             <DialogDescription className="text-sm leading-6">
-              确认删除用户密钥「{deletingItem?.name}」吗？删除后该密钥将无法继续调用接口。
+              Are you sure you want to delete user key "{deletingItem?.name}"? Once deleted, this key will no longer be able to call the API.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -890,7 +890,7 @@ export function UserKeysCard() {
               onClick={() => setDeletingItem(null)}
               disabled={deletingItem ? pendingIds.has(deletingItem.id) : false}
             >
-              取消
+              Cancel
             </Button>
             <Button
               type="button"
@@ -903,7 +903,7 @@ export function UserKeysCard() {
               ) : (
                 <Trash2 className="size-4" />
               )}
-              删除
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -917,9 +917,9 @@ export function UserKeysCard() {
                 <KeyRound className="size-5" />
               </div>
               <div className="min-w-0">
-                <DialogTitle className="text-[22px] leading-7">编辑用户密钥</DialogTitle>
+                <DialogTitle className="text-[22px] leading-7">Edit User Key</DialogTitle>
                 <DialogDescription className="mt-1 max-w-2xl text-sm leading-6 text-stone-500">
-                  调整身份、权限、额度和专用密钥。空白额度栏位保持当前值不变。
+                  Adjust identity, permissions, quotas, and dedicated key. Blank quota fields keep current values unchanged.
                 </DialogDescription>
               </div>
             </div>
@@ -927,14 +927,14 @@ export function UserKeysCard() {
           <div className="max-h-[calc(90vh-154px)] overflow-y-auto px-6 py-5 sm:px-7">
             <div className="space-y-5">
               <section className="space-y-4">
-                <SectionHeading title="密钥档案" hint={editingItem ? `ID ${editingItem.id}` : "基础信息"} />
+                <SectionHeading title="Key Profile" hint={editingItem ? `ID ${editingItem.id}` : "Basic info"} />
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
                   <div className="space-y-2">
-                    <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">名称</label>
+                    <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">Name</label>
                     <Input
                       value={editName}
                       onChange={(event) => setEditName(event.target.value)}
-                      placeholder="例如：设计同学 A、运营临时账号"
+                      placeholder="e.g. Designer A, Ops temporary account"
                       className="h-12 rounded-2xl border-stone-200 bg-white shadow-none"
                     />
                   </div>
@@ -944,16 +944,16 @@ export function UserKeysCard() {
               {editingItem && editForm ? (
                 <>
                   <QuotaGroupEdit
-                    title="画图额度"
-                    groupHint="按生成图片张数计数。"
+                    title="Image Quota"
+                    groupHint="Counted by number of images generated."
                     kinds={IMAGE_QUOTA_KINDS}
                     item={editingItem}
                     form={editForm}
                     onChange={updateEditField}
                   />
                   <QuotaGroupEdit
-                    title="对话额度"
-                    groupHint="POST /api/chat/stream 每次请求扣 1。"
+                    title="Chat Quota"
+                    groupHint="Each POST /api/chat/stream request deducts 1."
                     kinds={CHAT_QUOTA_KINDS}
                     item={editingItem}
                     form={editForm}
@@ -962,15 +962,15 @@ export function UserKeysCard() {
                 </>
               ) : null}
               <section className="space-y-3">
-                <SectionHeading title="密钥替换" hint="留空则不变；保存后旧密钥立即失效。" />
+                <SectionHeading title="Key Replacement" hint="Leave empty to keep current; old key is invalidated immediately after save." />
                 <Input
                   value={editKey}
                   onChange={(event) => setEditKey(event.target.value)}
-                  placeholder="例如：sk-your-custom-user-key"
+                  placeholder="e.g. sk-your-custom-user-key"
                   className="h-12 rounded-2xl border-stone-200 bg-white font-mono text-[13px] shadow-none"
                 />
                 <p className="text-xs leading-5 text-stone-500">
-                  系统仍只保存哈希，不会回显当前密钥。
+                  The system only stores hashes and will not display the current key.
                 </p>
               </section>
             </div>
@@ -983,7 +983,7 @@ export function UserKeysCard() {
               onClick={closeEditDialog}
               disabled={editingItem ? pendingIds.has(editingItem.id) : false}
             >
-              取消
+              Cancel
             </Button>
             <Button
               type="button"
@@ -996,7 +996,7 @@ export function UserKeysCard() {
               ) : (
                 <Pencil className="size-4" />
               )}
-              保存
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1039,10 +1039,10 @@ function KeyRow({
       } else {
         setPlaintext("");
         setKeyInput("");
-        setRevealError("这条是历史密钥，后端只存了哈希。改成你想要的值或直接点「生成新密钥」即可，旧密钥会立即失效。");
+        setRevealError("This is a legacy key — the backend only stored the hash. Change it to your desired value or click \"Generate New Key\"; the old key will be invalidated immediately.");
       }
     } catch (error) {
-      setRevealError(error instanceof Error ? error.message : "读取密钥失败");
+      setRevealError(error instanceof Error ? error.message : "Failed to read key");
     } finally {
       setRevealLoading(false);
     }
@@ -1059,9 +1059,9 @@ function KeyRow({
       onAfterRegenerate(data.items, data.key);
       setConfirmOpen(false);
       setRevealOpen(false);
-      toast.success(useCustom ? "已替换为自定义密钥，旧密钥已失效" : "已生成新密钥，旧密钥已失效");
+      toast.success(useCustom ? "Replaced with custom key, old key invalidated" : "New key generated, old key invalidated");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "重置密钥失败");
+      toast.error(error instanceof Error ? error.message : "Failed to reset key");
     } finally {
       setRegenerating(false);
     }
@@ -1087,7 +1087,7 @@ function KeyRow({
       </td>
       <td className="px-4 py-3">
         <Badge variant={item.enabled ? "success" : "secondary"} className="rounded-md">
-          {item.enabled ? "已启用" : "已禁用"}
+          {item.enabled ? "Enabled" : "Disabled"}
         </Badge>
       </td>
       <td className="px-4 py-3">
@@ -1105,10 +1105,10 @@ function KeyRow({
             onOpenChange={(next) => {
               setRevealOpen(next);
               if (next) void loadPlaintext();
-              // 关闭分支故意不清 keyInput / plaintext / revealError：
-              // 点"确认替换"时，pointerDown 先到达 Popover 的 onPointerDownOutside（Dialog 是另一个 portal），
-              // 这里若清掉 keyInput，紧接着的 click 会跑到带空 keyInput 的新闭包，
-              // 请求体 key="" 让后端走自动生成分支。下次打开 Popover 时 loadPlaintext 会重写这几个状态。
+              // Intentionally not clearing keyInput / plaintext / revealError on close:
+              // When clicking "Confirm Replace", pointerDown reaches Popover's onPointerDownOutside first (Dialog is another portal).
+              // If keyInput is cleared here, the subsequent click runs with an empty keyInput closure,
+              // causing key="" in the request body which makes the backend auto-generate. loadPlaintext will rewrite these states on next open.
             }}
           >
             <PopoverTrigger asChild>
@@ -1116,17 +1116,17 @@ function KeyRow({
                 type="button"
                 className="cursor-pointer rounded-md p-1.5 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50"
                 disabled={pending}
-                title="查看密钥"
+                title="View key"
               >
                 <Eye className="size-4" />
               </button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-[320px] space-y-3 text-sm">
-              <div className="text-xs font-medium text-stone-500">{item.name} · 当前密钥</div>
+              <div className="text-xs font-medium text-stone-500">{item.name} · Current Key</div>
               {revealLoading ? (
                 <div className="flex items-center gap-2 text-stone-500">
                   <LoaderCircle className="size-4 animate-spin" />
-                  正在读取…
+                  Loading…
                 </div>
               ) : (
                 <>
@@ -1136,7 +1136,7 @@ function KeyRow({
                   <Input
                     value={keyInput}
                     onChange={(event) => setKeyInput(event.target.value)}
-                    placeholder={plaintext ? "" : "留空则自动生成新密钥"}
+                    placeholder={plaintext ? "" : "Leave empty to auto-generate a new key"}
                     className="h-9 rounded-lg border-stone-200 bg-white font-mono text-[12px]"
                   />
                   <div className="flex items-center justify-end gap-2">
@@ -1149,7 +1149,7 @@ function KeyRow({
                         onClick={() => void copyToClipboard(keyInput || plaintext)}
                       >
                         <Copy className="size-3.5" />
-                        复制
+                        Copy
                       </Button>
                     ) : null}
                     <Button
@@ -1164,7 +1164,7 @@ function KeyRow({
                       ) : (
                         <RefreshCw className="size-3.5" />
                       )}
-                      {useCustom ? "替换为该密钥" : "重置"}
+                      {useCustom ? "Replace with this key" : "Reset"}
                     </Button>
                   </div>
                 </>
@@ -1176,7 +1176,7 @@ function KeyRow({
             className="cursor-pointer rounded-md p-1.5 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50"
             onClick={onEdit}
             disabled={pending}
-            title="编辑"
+            title="Edit"
           >
             {pending ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
           </button>
@@ -1185,7 +1185,7 @@ function KeyRow({
             className="cursor-pointer rounded-md p-1.5 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50"
             onClick={onToggle}
             disabled={pending}
-            title={item.enabled ? "禁用" : "启用"}
+            title={item.enabled ? "Disable" : "Enable"}
           >
             {item.enabled ? <Ban className="size-4" /> : <CheckCircle2 className="size-4" />}
           </button>
@@ -1194,7 +1194,7 @@ function KeyRow({
             className="cursor-pointer rounded-md p-1.5 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
             onClick={onDelete}
             disabled={pending}
-            title="删除"
+            title="Delete"
           >
             <Trash2 className="size-4" />
           </button>
@@ -1204,17 +1204,17 @@ function KeyRow({
     <Dialog open={confirmOpen} onOpenChange={(open) => (!open && !regenerating ? setConfirmOpen(false) : null)}>
       <DialogContent className="rounded-2xl p-6 sm:max-w-[440px]">
         <DialogHeader className="gap-2">
-          <DialogTitle>{useCustom ? "替换为自定义密钥" : "重置密钥"}</DialogTitle>
+          <DialogTitle>{useCustom ? "Replace with Custom Key" : "Reset Key"}</DialogTitle>
           <DialogDescription className="text-sm leading-6">
             {useCustom ? (
               <>
-                确认把「{item.name}」的密钥替换为下面这个值吗？旧密钥会立即失效。
+                Are you sure you want to replace the key for "{item.name}" with the value below? The old key will be invalidated immediately.
                 <span className="mt-3 block rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-[12px] break-all text-stone-800">
                   {trimmedInput}
                 </span>
               </>
             ) : (
-              <>确认重置「{item.name}」的密钥吗？旧密钥会立即失效，使用方需要更换为新密钥。</>
+              <>Are you sure you want to reset the key for "{item.name}"? The old key will be invalidated immediately, and users will need to switch to the new key.</>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -1226,7 +1226,7 @@ function KeyRow({
             onClick={() => setConfirmOpen(false)}
             disabled={regenerating}
           >
-            取消
+            Cancel
           </Button>
           <Button
             type="button"
@@ -1235,7 +1235,7 @@ function KeyRow({
             disabled={regenerating}
           >
             {regenerating ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            {useCustom ? "确认替换" : "确认重置"}
+            {useCustom ? "Confirm Replace" : "Confirm Reset"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1262,7 +1262,7 @@ function AccountTierSelect({
 }) {
   return (
     <div className="space-y-2">
-      <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">账号权限</label>
+      <label className="text-xs font-semibold tracking-wide text-stone-500 uppercase">Account Tier</label>
       <div className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 bg-stone-50 p-1">
         {ACCOUNT_TIER_OPTIONS.map((option) => {
           const selected = value === option.value;
@@ -1310,22 +1310,22 @@ function QuotaGroupSummary({ kinds, item }: { kinds: QuotaMeta[]; item: UserKey 
             </span>
             {unlimited ? (
               <span className="ml-auto inline-flex items-center gap-1.5 tabular-nums">
-                <span className="text-stone-700">已用 {used}</span>
+                <span className="text-stone-700">Used {used}</span>
                 <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700">
                   <InfinityIcon className="size-3" />
-                  不限
+                  Unlimited
                 </span>
               </span>
             ) : exhausted ? (
               <span className="ml-auto rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700">
-                已用完
+                Exhausted
               </span>
             ) : (
               <span className="ml-auto tabular-nums">
                 <span className="text-stone-700">
                   {used}/{quota}
                 </span>
-                <span className="ml-1 text-stone-400">剩 {remaining}</span>
+                <span className="ml-1 text-stone-400">Left {remaining}</span>
               </span>
             )}
           </div>
@@ -1387,7 +1387,7 @@ function QuotaGroupCreate({
                 value={conf.quota}
                 onChange={(event) => onChange(meta.kind, { quota: event.target.value })}
                 disabled={conf.unlimited}
-                placeholder="例如：100"
+                placeholder="e.g. 100"
                 className="h-11 rounded-xl border-stone-200 bg-stone-50/60 font-data tabular-nums shadow-none disabled:bg-stone-100"
               />
               <label
@@ -1403,7 +1403,7 @@ function QuotaGroupCreate({
                   onCheckedChange={(checked) => onChange(meta.kind, { unlimited: Boolean(checked) })}
                   className={cn(conf.unlimited ? "border-white bg-white text-stone-900" : "bg-white")}
                 />
-                <span>不限额</span>
+                <span>Unlimited</span>
                 {conf.unlimited ? <InfinityIcon className="size-3.5" /> : null}
               </label>
             </div>
@@ -1489,11 +1489,11 @@ function EditQuotaCell({
           <div className="text-sm font-semibold text-stone-900">{meta.label}</div>
           <div className="mt-0.5 font-data text-xs leading-5 tabular-nums text-stone-500">
             {currentUnlimited ? (
-              <>已用 {currentUsed} · 当前不限</>
+              <>Used {currentUsed} · Currently unlimited</>
             ) : (
               <>
-                已用 {currentUsed} / 当前 {currentQuota}
-                <span className="ml-1 text-stone-400">剩 {currentRemaining}</span>
+                Used {currentUsed} / Current {currentQuota}
+                <span className="ml-1 text-stone-400">Left {currentRemaining}</span>
               </>
             )}
           </div>
@@ -1512,7 +1512,7 @@ function EditQuotaCell({
                   : "text-stone-500 hover:text-stone-700",
               )}
             >
-              追加
+              Add
             </button>
             <button
               type="button"
@@ -1524,7 +1524,7 @@ function EditQuotaCell({
                   : "text-stone-500 hover:text-stone-700",
               )}
             >
-              覆盖
+              Set
             </button>
           </div>
         ) : null}
@@ -1535,12 +1535,12 @@ function EditQuotaCell({
             value={value.quota}
             onChange={(event) => onChange({ quota: event.target.value })}
             disabled={value.unlimited}
-            placeholder={value.mode === "add" ? "再追加多少" : "新的上限"}
+            placeholder={value.mode === "add" ? "Amount to add" : "New limit"}
             className="h-10 rounded-xl border-stone-200 bg-stone-50/60 font-data tabular-nums shadow-none disabled:bg-stone-100"
           />
           {hasPreview ? (
             <p className="font-data text-[11px] leading-4 tabular-nums text-stone-500">
-              保存后 <span className="font-semibold text-stone-800">{previewNext}</span>
+              After save <span className="font-semibold text-stone-800">{previewNext}</span>
             </p>
           ) : null}
         </div>
@@ -1557,14 +1557,14 @@ function EditQuotaCell({
             onCheckedChange={(checked) => onChange({ unlimited: Boolean(checked) })}
             className={cn(value.unlimited ? "border-white bg-white text-stone-900" : "bg-white")}
           />
-          <span>不限额</span>
+          <span>Unlimited</span>
           {value.unlimited ? <InfinityIcon className="size-3.5" /> : null}
         </label>
         <button
           type="button"
           onClick={() => onChange({ resetUsed: !value.resetUsed })}
-          aria-label={value.resetUsed ? "保存时重置已用额度" : "重置已用额度"}
-          title={value.resetUsed ? "保存时重置已用额度" : "重置已用额度"}
+          aria-label={value.resetUsed ? "Reset used quota on save" : "Reset used quota"}
+          title={value.resetUsed ? "Reset used quota on save" : "Reset used quota"}
           className={cn(
             "inline-flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border text-xs font-medium transition",
             value.resetUsed

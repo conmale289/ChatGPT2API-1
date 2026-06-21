@@ -91,7 +91,7 @@ class RegisterService:
             self._save()
             self._runner = threading.Thread(target=self._run, daemon=True, name="openai-register")
             self._runner.start()
-            self._append_log(f"注册任务启动，模式={self._config['mode']}，线程数={self._config['threads']}", "yellow")
+            self._append_log(f"Registration task started, mode={self._config['mode']}, threads={self._config['threads']}", "yellow")
             return self.get()
 
     def stop(self) -> dict:
@@ -101,9 +101,9 @@ class RegisterService:
             self._config["stats"]["updated_at"] = _now()
             self._save()
             if job_kind == "repair_abnormal":
-                self._append_log("已请求停止异常账号修复，当前账号处理完后停止", "yellow")
+                self._append_log("Requested to stop abnormal account recovery, will stop after the current account is processed", "yellow")
             else:
-                self._append_log("已请求停止注册任务，正在等待当前运行任务结束", "yellow")
+                self._append_log("Requested to stop registration task, waiting for currently running tasks to finish", "yellow")
             return self.get()
 
     def reset(self) -> dict:
@@ -118,11 +118,11 @@ class RegisterService:
     def repair_abnormal_accounts(self) -> dict:
         with self._lock:
             if self._runner and self._runner.is_alive():
-                self._append_log("已有注册机任务正在运行，暂不能启动异常账号修复", "yellow")
+                self._append_log("A registration task is already running, cannot start abnormal account recovery for now", "yellow")
                 return self.get()
-            abnormal = [item for item in account_service.list_accounts() if item.get("status") == "异常"]
+            abnormal = [item for item in account_service.list_accounts() if item.get("status") == "abnormal"]
             if not abnormal:
-                self._append_log("没有需要修复的异常账号", "yellow")
+                self._append_log("No abnormal accounts need to be repaired", "yellow")
                 return self.get()
             self._config["enabled"] = True
             self._logs = []
@@ -142,7 +142,7 @@ class RegisterService:
             self._save()
             self._runner = threading.Thread(target=self._repair_abnormal_run, daemon=True, name="openai-register-repair")
             self._runner.start()
-            self._append_log(f"异常账号修复任务启动，共 {len(abnormal)} 个账号", "yellow")
+            self._append_log(f"Abnormal account recovery task started, {len(abnormal)} accounts in total", "yellow")
             return self.get()
 
     def _append_log(self, text: str, color: str = "") -> None:
@@ -152,7 +152,7 @@ class RegisterService:
 
     def _pool_metrics(self) -> dict:
         items = account_service.list_accounts()
-        normal = [item for item in items if item.get("status") == "正常"]
+        normal = [item for item in items if item.get("status") == "normal"]
         return {
             "current_quota": sum(int(item.get("quota") or 0) for item in normal if not item.get("image_quota_unknown")),
             "current_available": len(normal),
@@ -164,11 +164,11 @@ class RegisterService:
         self._bump(**metrics)
         if mode == "quota":
             reached = metrics["current_quota"] >= int(cfg.get("target_quota") or 1)
-            self._append_log(f"检查号池：当前正常账号={metrics['current_available']}，当前剩余额度={metrics['current_quota']}，目标额度={cfg.get('target_quota')}，{'跳过注册' if reached else '继续注册'}", "yellow")
+            self._append_log(f"Pool check: current available accounts={metrics['current_available']}, current remaining quota={metrics['current_quota']}, target quota={cfg.get('target_quota')}, {'skipping registration' if reached else 'continuing registration'}", "yellow")
             return reached
         if mode == "available":
             reached = metrics["current_available"] >= int(cfg.get("target_available") or 1)
-            self._append_log(f"检查号池：当前正常账号={metrics['current_available']}，目标账号={cfg.get('target_available')}，当前剩余额度={metrics['current_quota']}，{'跳过注册' if reached else '继续注册'}", "yellow")
+            self._append_log(f"Pool check: current available accounts={metrics['current_available']}, target available accounts={cfg.get('target_available')}, current remaining quota={metrics['current_quota']}, {'skipping registration' if reached else 'continuing registration'}", "yellow")
             return reached
         return submitted >= int(cfg.get("total") or 1)
 
@@ -220,16 +220,16 @@ class RegisterService:
                     for future in futures:
                         future.cancel()
                     if futures:
-                        self._append_log(f"已停止主调度，{len(futures)} 个在跑的任务后台跑完后自然结束（不再统计）", "yellow")
+                        self._append_log(f"Main scheduler stopped, {len(futures)} running tasks will finish in the background (no longer counted)", "yellow")
                     break
         self._bump(running=0, done=done, success=success, fail=fail, finished_at=_now())
         with self._lock:
             self._config["enabled"] = False
             self._save()
-        self._append_log(f"注册任务结束，成功{success}，失败{fail}", "yellow")
+        self._append_log(f"Registration task ended, success={success}, fail={fail}", "yellow")
 
     def _repair_abnormal_run(self) -> None:
-        abnormal = [item for item in account_service.list_accounts() if item.get("status") == "异常"]
+        abnormal = [item for item in account_service.list_accounts() if item.get("status") == "abnormal"]
         total = len(abnormal)
         success = 0
         fail = 0
@@ -238,7 +238,7 @@ class RegisterService:
         self._bump(running=1, done=0, success=0, fail=0)
         for index, account in enumerate(abnormal, start=1):
             if not self.get().get("enabled"):
-                self._append_log("异常账号修复任务已停止，剩余账号未继续处理", "yellow")
+                self._append_log("Abnormal account recovery task stopped, remaining accounts will not be processed", "yellow")
                 break
             processed = index
             old_token = str(account.get("access_token") or "").strip()
@@ -249,39 +249,39 @@ class RegisterService:
             password = str(account.get("password") or "").strip() or fixed_password
             if not email:
                 fail += 1
-                self._append_log(f"[修复{index}/{total}] 异常账号缺少邮箱，token={old_token[:12]}...，直接删除账号并尝试清理邮箱", "red")
+                self._append_log(f"[Repair {index}/{total}] Abnormal account missing email, token={old_token[:12]}..., deleting account directly and attempting to clean up mailbox", "red")
                 account_service.delete_accounts([old_token], delete_mailboxes=True)
                 self._bump(done=index, success=success, fail=fail, **self._pool_metrics())
                 continue
 
             registrar = openai_register.PlatformRegistrar(str(self.get().get("proxy") or ""))
             try:
-                self._append_log(f"[修复{index}/{total}] 开始修复异常账号 {email}", "yellow")
+                self._append_log(f"[Repair {index}/{total}] Start repairing abnormal account {email}", "yellow")
                 result = registrar.authenticate_existing(email, mailbox, password, index)
                 new_token = str(result.get("access_token") or "").strip()
                 if not new_token:
-                    raise RuntimeError("登录认证成功但未返回 access_token")
+                    raise RuntimeError("Login authentication succeeded but access_token was not returned")
                 if new_token == old_token:
-                    account_service.update_account(old_token, {**result, "status": "正常"})
+                    account_service.update_account(old_token, {**result, "status": "normal"})
                     refresh_result = account_service.refresh_accounts([old_token])
                     if refresh_result.get("errors"):
-                        raise RuntimeError(str(refresh_result["errors"][0].get("error") or "刷新账号信息失败"))
+                        raise RuntimeError(str(refresh_result["errors"][0].get("error") or "Failed to refresh account info"))
                 else:
                     account_service.add_accounts([new_token], [result])
                     refresh_result = account_service.refresh_accounts([new_token])
                     if refresh_result.get("errors"):
                         account_service.delete_accounts([new_token], delete_mailboxes=False)
-                        raise RuntimeError(str(refresh_result["errors"][0].get("error") or "刷新账号信息失败"))
+                        raise RuntimeError(str(refresh_result["errors"][0].get("error") or "Failed to refresh account info"))
                     account_service.delete_accounts([old_token], delete_mailboxes=False)
                 success += 1
-                self._append_log(f"[修复{index}/{total}] {email} 修复成功，已移除旧异常账号，保留邮箱账号", "green")
+                self._append_log(f"[Repair {index}/{total}] {email} repaired successfully, old abnormal account removed, mailbox account kept", "green")
             except AccountDeletedError as exc:
                 fail += 1
-                self._append_log(f"[修复{index}/{total}] 异常账号 {email} 已被删除（password/verify 403），清理账号和邮箱: {exc}", "red")
+                self._append_log(f"[Repair {index}/{total}] Abnormal account {email} was deleted (password/verify 403), cleaning up account and mailbox: {exc}", "red")
                 account_service.delete_accounts([old_token], delete_mailboxes=True)
             except Exception as exc:
                 fail += 1
-                self._append_log(f"[修复{index}/{total}] 异常账号 {email} 登录认证失败，原因: {exc}", "red")
+                self._append_log(f"[Repair {index}/{total}] Abnormal account {email} login authentication failed, reason: {exc}", "red")
                 account_service.delete_accounts([old_token], delete_mailboxes=True)
             finally:
                 registrar.close()
@@ -290,7 +290,7 @@ class RegisterService:
         with self._lock:
             self._config["enabled"] = False
             self._save()
-        self._append_log(f"异常账号修复任务结束，成功{success}，失败{fail}", "yellow")
+        self._append_log(f"Abnormal account recovery task ended, success={success}, fail={fail}", "yellow")
 
 
 register_service = RegisterService(REGISTER_FILE)

@@ -9,17 +9,17 @@ import {
 } from "@/store/auth";
 
 /**
- * 模块级会话缓存。
+ * Module-level session cache.
  *
- * 为什么需要：每个受 useAuthGuard 保护的页面在挂载时都会跑一次
- * getValidatedAuthSession()，里面有一发 login() 网络请求。校验回来之前
- * useAuthGuard 维持 isCheckingAuth=true，页面就吐一个 spinner——
- * 表现为路由切换后先闪一个加载图标，再出来真内容。
+ * Why needed: every page protected by useAuthGuard calls getValidatedAuthSession() on mount,
+ * which fires a login() network request. Until validation returns, useAuthGuard holds
+ * isCheckingAuth=true and the page shows a spinner — resulting in a flash of loading indicator
+ * on every route change before real content appears.
  *
- * 缓存策略：
- *  - getCachedAuthSession() 同步返回最近一次校验结果（命中即免 spinner）。
- *  - getValidatedAuthSession() 仍走网络重新校验，刷新缓存。
- *  - login / logout / 401 拦截会主动清缓存。
+ * Cache strategy:
+ *  - getCachedAuthSession() synchronously returns the last validated result (cache hit skips spinner).
+ *  - getValidatedAuthSession() still does a network re-validation and refreshes the cache.
+ *  - login / logout / 401 interceptor proactively clears the cache.
  */
 let cachedSession: StoredAuthSession | null = null;
 let hasValidatedOnce = false;

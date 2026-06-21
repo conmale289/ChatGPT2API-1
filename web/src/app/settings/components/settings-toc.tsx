@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * 设置页右锚 TOC（table of contents）。
+ * Settings page right-anchor TOC (table of contents).
  *
- * 行为：
- *   - sticky 钉在右侧，lg+ 才显示——< 1024px 直接隐藏，避免压窄主内容区
- *   - 用 IntersectionObserver 监听各 [data-settings-section] 节点，
- *     选 viewport 顶部之下、最靠上的那个 section 作为 active
- *   - 点击 TOC item 用 scrollIntoView({ behavior: "smooth", block: "start" })
- *     滚到对应 section；section 自带 scroll-mt-24 给 sticky header 让位
+ * Behavior:
+ *   - Sticky on the right side, only visible at lg+ — below 1024px it's hidden to avoid narrowing main content
+ *   - Uses IntersectionObserver to monitor [data-settings-section] nodes,
+ *     picks the section closest to the top of the viewport as active
+ *   - Clicking a TOC item uses scrollIntoView({ behavior: "smooth", block: "start" })
+ *     to scroll to the corresponding section; sections have scroll-mt-24 to account for sticky header
  *
- * TOC items 由父组件传入，避免硬编码顺序——以后调换 section 顺序不用动 TOC。
+ * TOC items are passed in by parent component to avoid hardcoding order —
+ * reordering sections in the future won't require changes to TOC.
  */
 export type TOCItem = { id: string; label: string };
 
@@ -27,11 +28,12 @@ export function SettingsTOC({ items }: { items: TOCItem[] }) {
       .filter((el): el is Element => Boolean(el));
     if (targets.length === 0) return;
 
-    // rootMargin 上 -20% 下 -70%：把"激活区"压到视口顶部 ~20% 处的窄带，
-    // 滚动时同一时刻只命中一个 section，TOC 不会闪烁切换
+    // rootMargin top -20% bottom -70%: compresses the "activation zone" to a narrow band
+    // at ~20% from the top of the viewport; only one section is hit at a time during scroll,
+    // preventing TOC from flickering between items
     const observer = new IntersectionObserver(
       (entries) => {
-        // 拿到当前所有相交且最靠上的那个
+        // Get the topmost intersecting entry
         const visible = entries
           .filter((e) => e.isIntersecting)
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
@@ -50,7 +52,7 @@ export function SettingsTOC({ items }: { items: TOCItem[] }) {
     const el = document.querySelector(`[data-settings-section="${id}"]`);
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "start" });
-      // 立刻更新高亮，不等 IO 回调，避免点击和高亮之间有 ~200ms 延迟
+      // Immediately update highlight, don't wait for IO callback to avoid ~200ms delay between click and highlight
       setActiveId(id);
     }
   };

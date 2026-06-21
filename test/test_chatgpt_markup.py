@@ -23,9 +23,9 @@ def _cite(*tokens: str) -> str:
 
 class SanitizeEntityTests(unittest.TestCase):
     def test_entity_replaced_with_name(self):
-        text = f"出自歌曲：{_entity('song', '爱丫爱丫', 'BY2歌曲')}演唱"
+        text = f"From song: {_entity('song', 'Love Love', 'BY2 Song')} sung"
         out = sanitize(text, {}, {}, [0])
-        self.assertEqual(out, "出自歌曲：爱丫爱丫演唱")
+        self.assertEqual(out, "From song: Love Love sung")
 
     def test_entity_object_replaced_with_name(self):
         text = f'{OPEN}entity{{"name":"OpenAI","type":"organization"}}{CLOSE}'
@@ -38,14 +38,14 @@ class SanitizeEntityTests(unittest.TestCase):
         self.assertEqual(out, "OpenAI")
 
     def test_orphan_pua_chars_dropped(self):
-        text = f"前缀{OPEN}cite{FIELD_SEP}turn0search0{CLOSE}尾"
+        text = f"prefix{OPEN}cite{FIELD_SEP}turn0search0{CLOSE}suffix"
         out = sanitize(text, {}, {}, [0])
-        self.assertEqual(out, "前缀尾")
+        self.assertEqual(out, "prefixsuffix")
 
     def test_unclosed_block_kept_for_next_frame(self):
-        text = f"出自{OPEN}entity[\"song\",\"爱丫"
+        text = f"From{OPEN}entity[\"song\",\"Love"
         out = sanitize(text, {}, {}, [0])
-        self.assertEqual(out, "出自")
+        self.assertEqual(out, "From")
 
     def test_lone_pua_chars_swept(self):
         text = f"a{FIELD_SEP}b{ITEM_SEP}c"
@@ -53,18 +53,18 @@ class SanitizeEntityTests(unittest.TestCase):
         self.assertEqual(out, "abc")
 
     def test_text_xml_tags_are_stripped(self):
-        text = "<Text>你好！</Text><Text>有什么我可以帮你的吗？</Text>"
+        text = "<Text>Hello! </Text><Text>Is there anything I can help you with?</Text>"
         out = sanitize(text, {}, {}, [0])
-        self.assertEqual(out, "你好！有什么我可以帮你的吗？")
+        self.assertEqual(out, "Hello! Is there anything I can help you with?")
 
     def test_bold_xml_tags_are_rendered_as_markdown(self):
-        text = "<Text><Bold>开发方：</Bold> OpenAI</Text>"
+        text = "<Text><Bold>Developer: </Bold> OpenAI</Text>"
         out = sanitize(text, {}, {}, [0])
-        self.assertEqual(out, "**开发方：** OpenAI")
+        self.assertEqual(out, "**Developer: ** OpenAI")
 
     def test_unclosed_text_tag_kept_for_next_frame(self):
-        out = sanitize("你好</Te", {}, {}, [0])
-        self.assertEqual(out, "你好")
+        out = sanitize("Hello</Te", {}, {}, [0])
+        self.assertEqual(out, "Hello")
 
 
 class SanitizeCiteTests(unittest.TestCase):
@@ -82,25 +82,25 @@ class SanitizeCiteTests(unittest.TestCase):
         }
 
     def test_cite_replaced_with_markdown_link(self):
-        text = f"出自 BY2 歌曲。{self.cite}"
+        text = f"From BY2 song. {self.cite}"
         numbers: dict[str, int] = {}
         out = sanitize(text, self.references, numbers, [0])
-        self.assertEqual(out, "出自 BY2 歌曲。[[1]](https://example.com/by2)")
+        self.assertEqual(out, "From BY2 song. [[1]](https://example.com/by2)")
         self.assertEqual(numbers, {self.cite: 1})
 
     def test_cite_dropped_when_no_metadata(self):
-        text = f"出自 BY2 歌曲。{self.cite}"
+        text = f"From BY2 song. {self.cite}"
         out = sanitize(text, {}, {}, [0])
-        self.assertEqual(out, "出自 BY2 歌曲。")
+        self.assertEqual(out, "From BY2 song. ")
 
     def test_repeated_cite_reuses_number(self):
-        text = f"句一。{self.cite}句二。{self.cite}"
+        text = f"Sentence one. {self.cite}Sentence two. {self.cite}"
         numbers: dict[str, int] = {}
         counter = [0]
         out = sanitize(text, self.references, numbers, counter)
         self.assertEqual(
             out,
-            "句一。[[1]](https://example.com/by2)句二。[[1]](https://example.com/by2)",
+            "Sentence one. [[1]](https://example.com/by2)Sentence two. [[1]](https://example.com/by2)",
         )
         self.assertEqual(numbers, {self.cite: 1})
 
@@ -131,7 +131,7 @@ class CollectReferencesTests(unittest.TestCase):
 
 
 class StreamingDeltaTests(unittest.TestCase):
-    """模拟上游 SSE 帧：cite 元数据帧在前、文本 patch 在后；半截标记跨帧到达。"""
+    """Simulate upstream SSE frames: cite metadata frame first, text patch next; partial markup arrives across frames."""
 
     def test_full_pipeline_strips_markup_in_deltas(self):
         cite = _cite("turn0search2")
@@ -149,12 +149,12 @@ class StreamingDeltaTests(unittest.TestCase):
                 }
             }
         }
-        entity = _entity("song", "爱丫爱丫", "BY2歌曲")
-        text_full = f"出自歌曲：{entity}{cite}"
+        entity = _entity("song", "Love Love", "BY2 Song")
+        text_full = f"From song: {entity}{cite}"
         import json as _json
         payloads = [
             _json.dumps(meta_event),
-            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "出自歌曲："}),
+            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "From song: "}),
             _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": entity[:5]}),
             _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": entity[5:]}),
             _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": cite}),
@@ -167,16 +167,16 @@ class StreamingDeltaTests(unittest.TestCase):
                 deltas.append(event["delta"])
                 final_text = event["text"]
         joined = "".join(deltas)
-        self.assertEqual(joined, "出自歌曲：爱丫爱丫[[1]](https://example.com)")
-        self.assertEqual(final_text, "出自歌曲：爱丫爱丫[[1]](https://example.com)")
+        self.assertEqual(joined, "From song: Love Love[[1]](https://example.com)")
+        self.assertEqual(final_text, "From song: Love Love[[1]](https://example.com)")
         self.assertNotIn(OPEN, joined)
         self.assertNotIn(CLOSE, joined)
 
     def test_full_pipeline_strips_text_tags_in_deltas(self):
         import json as _json
         payloads = [
-            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "<Text>你好！</Text><Te"}),
-            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "xt>有什么我可以帮你的吗？</Text>"}),
+            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "<Text>Hello! </Text><Te"}),
+            _json.dumps({"p": "/message/content/parts/0", "o": "append", "v": "xt>Is there anything I can help you with?</Text>"}),
             "[DONE]",
         ]
         deltas: list[str] = []
@@ -186,8 +186,8 @@ class StreamingDeltaTests(unittest.TestCase):
                 deltas.append(event["delta"])
                 final_text = event["text"]
         joined = "".join(deltas)
-        self.assertEqual(joined, "你好！有什么我可以帮你的吗？")
-        self.assertEqual(final_text, "你好！有什么我可以帮你的吗？")
+        self.assertEqual(joined, "Hello! Is there anything I can help you with?")
+        self.assertEqual(final_text, "Hello! Is there anything I can help you with?")
         self.assertNotIn("<Text>", joined)
         self.assertNotIn("</Text>", joined)
 

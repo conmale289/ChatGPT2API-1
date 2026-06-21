@@ -25,20 +25,20 @@ import { Sub2APIConnections } from "./components/sub2api-connections";
 import { useSettingsStore } from "./store";
 
 /**
- * TOC 顺序 = 页面 section 顺序，不需要双份维护：
- *   - 主内容区 map 这条 list 渲染 <Section>
- *   - 右侧 TOC 也用这条 list
+ * TOC order = page section order, no need for duplicate maintenance:
+ *   - The main content area maps this list to render <Section>
+ *   - The right TOC also uses this list
  */
 const SECTIONS: Array<TOCItem & { description: string }> = [
-  { id: "account", label: "账号与身份", description: "账号刷新策略与自动维护开关。用户密钥分发请前往「用户密钥」页。" },
-  { id: "network", label: "网络", description: "全局代理：同时影响生图请求和 OpenAI 上游转发。" },
-  { id: "images", label: "图片", description: "访问地址、生成超时、并发上限、过期清理及保护策略。" },
-  { id: "security", label: "内容安全", description: "敏感词与全局附加指令——把审查放在请求落到生图账号之前。" },
-  { id: "ai-review", label: "AI 审核", description: "用一个独立模型对用户提示词做合规判断，命中即拒绝。" },
-  { id: "logs", label: "日志", description: "控制台输出级别。debug 仅排查问题时打开。" },
-  { id: "backup", label: "备份", description: "Cloudflare R2 自动备份配置、立即备份与历史备份列表。" },
-  { id: "cpa", label: "CPA 号池", description: "外部 CPA 接入，支持远程账号选择性导入到本地号池。" },
-  { id: "sub2api", label: "sub2api", description: "把已有的 OpenAI 兼容服务串成 sub2api 多节点上游。" },
+  { id: "account", label: "Account & Identity", description: "Account refresh strategy and auto-maintenance toggles. For user key distribution, go to the \"User Keys\" page." },
+  { id: "network", label: "Network", description: "Global proxy: affects both image generation requests and OpenAI upstream forwarding." },
+  { id: "images", label: "Images", description: "Access URL, generation timeout, concurrency limit, expiry cleanup, and protection policies." },
+  { id: "security", label: "Content Safety", description: "Sensitive words and global system prompt — review requests before they reach image generation accounts." },
+  { id: "ai-review", label: "AI Review", description: "Use an independent model to evaluate user prompts for compliance; reject on match." },
+  { id: "logs", label: "Logs", description: "Console output level. Enable debug only when troubleshooting." },
+  { id: "backup", label: "Backup", description: "Cloudflare R2 auto-backup configuration, manual backup, and backup history." },
+  { id: "cpa", label: "CPA Pool", description: "External CPA integration with selective remote account import to local pool." },
+  { id: "sub2api", label: "sub2api", description: "Chain existing OpenAI-compatible services as sub2api multi-node upstreams." },
 ];
 
 function SettingsDataController() {
@@ -79,9 +79,9 @@ function SettingsDataController() {
 }
 
 /**
- * Section 内容路由：根据 id 渲染对应组件。
- * 把映射放这里而不是 SECTIONS 数组里，是因为 sections 数据要序列化传给 TOC，
- * 不能塞 React 组件。
+ * Section content router: renders the corresponding component based on id.
+ * The mapping is here instead of in the SECTIONS array because sections data
+ * needs to be serializable for the TOC and cannot contain React components.
  */
 function SectionBody({ id }: { id: string }) {
   switch (id) {
@@ -115,9 +115,9 @@ function SettingsPageContent() {
       <SettingsDataController />
       <SettingsHeader />
 
-      {/* 左主内容 + 右锚 TOC：lg+ 用 grid 双栏，移动端 TOC 由自身的 hidden lg:block 隐藏。
-          gap-12：让主内容区与 TOC 之间留出充足的"空气"，TOC 不会贴着内容卡边缘。
-          pb-24：给底部 FloatingSaveBar 留位，避免它浮现时盖住最后一条 section 的输入。 */}
+      {/* Left main content + right anchor TOC: lg+ uses grid two-column layout, mobile TOC is hidden via its own hidden lg:block.
+          gap-12: provides enough breathing room between main content and TOC.
+          pb-24: reserves space for the bottom FloatingSaveBar so it doesn't cover the last section's inputs. */}
       <div className="mt-8 flex gap-12 pb-24">
         <main className="min-w-0 flex-1 space-y-12">
           {SECTIONS.map(({ id, label, description }) => (

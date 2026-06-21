@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import random
+import uuid
 from threading import Condition, Lock
 from typing import Any
 from datetime import datetime, timedelta, timezone
@@ -14,9 +16,51 @@ from services.log_service import (
 from services.storage.base import StorageBackend
 from utils.helper import anonymize_token
 
+# Fingerprint profiles for diversity - each account gets one assigned at creation
+_FP_PROFILES = [
+    {
+        "impersonate": "chrome131",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    },
+    {
+        "impersonate": "chrome131",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
+    {
+        "impersonate": "edge131",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+        "sec-ch-ua": '"Microsoft Edge";v="131", "Chromium";v="131", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    },
+    {
+        "impersonate": "safari18_0",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+        "sec-ch-ua": '""',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
+]
+
+
+def generate_fingerprint() -> dict:
+    """Generate a unique persistent fingerprint profile for a new account."""
+    profile = random.choice(_FP_PROFILES)
+    return {
+        **profile,
+        "oai-device-id": str(uuid.uuid4()),
+        "oai-session-id": str(uuid.uuid4()),
+    }
+
 
 class AccountService:
-    """账号池服务，使用 token -> account 的 dict 保存账号。"""
+    """Account pool service, saving accounts using a token -> account dict."""
 
     def __init__(self, storage_backend: StorageBackend):
         self.storage = storage_backend
@@ -25,6 +69,9 @@ class AccountService:
         self._index = 0
         self._accounts = self._load_accounts()
         self._image_inflight: dict[str, int] = {}
+        # Persist any newly generated fingerprints on first load
+        if self._accounts:
+            self._save_accounts()
 
     def _load_accounts(self) -> dict[str, dict]:
         accounts = self.storage.load_accounts()
@@ -84,12 +131,25 @@ class AccountService:
     def _is_image_account_available(cls, account: dict) -> bool:
         if not isinstance(account, dict):
             return False
-        if account.get("status") in {"禁用", "异常"}:
+        if account.get("status") in {"disabled", "abnormal"}:
             return False
         if cls._is_runtime_rate_limited(account):
             return False
-        if account.get("status") == "限流" and not cls._rate_limit_reset_at(account):
+        if account.get("status") == "rate_limited" and not cls._rate_limit_reset_at(account):
             return False
+        # Per-account cooldown: minimum 10 seconds between uses to avoid detection
+        last_used = account.get("last_used_at")
+        if last_used:
+            import time
+            try:
+                from datetime import datetime, timezone
+                if isinstance(last_used, str):
+                    dt = datetime.strptime(last_used, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    elapsed = time.time() - dt.timestamp()
+                    if elapsed < 10:
+                        return False
+            except (ValueError, TypeError):
+                pass
         if bool(account.get("image_quota_unknown")):
             return True
         return int(account.get("quota") or 0) > 0
@@ -190,11 +250,18 @@ class AccountService:
             normalized.pop("type", None)
         normalized["type"] = normalized.get("type") or "free"
         normalized["type"] = self._normalize_account_type(normalized["type"]) or "free"
-        normalized["status"] = normalized.get("status") or "正常"
+        status = normalized.get("status") or "normal"
+        status_map = {
+            "正常": "normal",
+            "限流": "rate_limited",
+            "异常": "abnormal",
+            "禁用": "disabled",
+        }
+        normalized["status"] = status_map.get(status, status)
         normalized["quota"] = max(0, int(normalized.get("quota") if normalized.get("quota") is not None else 0))
-        # initial_quota：注册时拿到的总额度。每次 normalize 取 max(已有, 当前 quota)，
-        # 这样首次拉到额度时自动落库；之后 mark_image_result 扣减 quota 不会拉低它；
-        # 账号续约导致 quota 涨上去也会自动跟上。
+        # initial_quota: Total quota obtained during registration. Each normalize takes max(existing, current quota),
+        # so that it is automatically stored when quota is first fetched; subsequent mark_image_result deductions
+        # will not lower it; account renewals causing quota to increase will automatically follow.
         existing_initial = int(normalized.get("initial_quota") or 0)
         normalized["initial_quota"] = max(existing_initial, int(normalized["quota"]))
         normalized["image_quota_unknown"] = bool(normalized.get("image_quota_unknown"))
@@ -224,6 +291,14 @@ class AccountService:
         normalized["expires_at"] = normalized.get("expires_at") or normalized.get("expired") or None
         normalized["client_id"] = normalized.get("client_id") or None
         normalized["created_at"] = normalized.get("created_at") or None
+        # Per-account fingerprint: generate once and persist
+        fp = normalized.get("fp")
+        if not isinstance(fp, dict) or not fp.get("oai-device-id"):
+            normalized["fp"] = generate_fingerprint()
+        else:
+            normalized["fp"] = fp
+        # Per-account proxy (optional, overrides global proxy)
+        normalized["proxy"] = normalized.get("proxy") or None
         return normalized
 
     def list_tokens(self) -> list[str]:
@@ -340,7 +415,7 @@ class AccountService:
             types = {
                 normalized
                 for account in self._accounts.values()
-                if account.get("status") not in {"禁用", "异常"}
+                if account.get("status") not in {"disabled", "abnormal"}
                    and account.get("access_token")
                    and (normalized := self._normalize_account_type(account.get("type")))
             }
@@ -358,7 +433,7 @@ class AccountService:
             candidates = [
                 token
                 for account in self._accounts.values()
-                if account.get("status") not in {"禁用", "异常"}
+                if account.get("status") not in {"disabled", "abnormal"}
                    and self._account_matches_plan_type(account, plan_type)
                    and self._account_matches_any_plan_type(account, plan_types)
                    and (token := account.get("access_token") or "")
@@ -387,14 +462,14 @@ class AccountService:
 
     def remove_invalid_token(self, access_token: str, event: str) -> bool:
         if not config.auto_remove_invalid_accounts:
-            self.update_account(access_token, {"status": "异常", "quota": 0})
+            self.update_account(access_token, {"status": "abnormal", "quota": 0})
             return False
         removed = bool(self.delete_accounts([access_token], delete_mailboxes=True)["removed"])
         if removed:
-            log_service.add(LOG_TYPE_ACCOUNT, "自动移除异常账号",
+            log_service.add(LOG_TYPE_ACCOUNT, "Automatically removed abnormal account",
                             {"source": event, "token": anonymize_token(access_token)})
         elif access_token:
-            self.update_account(access_token, {"status": "异常", "quota": 0})
+            self.update_account(access_token, {"status": "abnormal", "quota": 0})
         return removed
 
     def get_account(self, access_token: str) -> dict | None:
@@ -406,14 +481,47 @@ class AccountService:
 
     def list_accounts(self) -> list[dict]:
         with self._lock:
-            return [dict(item) for item in self._accounts.values()]
+            return [{**item, "health_score": self._health_score(item)} for item in self._accounts.values()]
+
+    @staticmethod
+    def _health_score(account: dict) -> int:
+        """Calculate account health (0-100). Lower = more at risk."""
+        score = 100
+        status = account.get("status", "normal")
+        if status == "abnormal":
+            return 0
+        if status == "disabled":
+            return 0
+        if status == "rate_limited":
+            score -= 40
+        # Penalize high failure count
+        fail = int(account.get("fail") or 0)
+        score -= min(30, fail * 5)
+        # Penalize accounts with no quota
+        if not account.get("image_quota_unknown") and int(account.get("quota") or 0) == 0:
+            score -= 20
+        # Bonus for aged accounts (created > 7 days ago)
+        created = account.get("created_at")
+        if created:
+            try:
+                from datetime import datetime, timezone
+                if isinstance(created, str):
+                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    age_days = (datetime.now(timezone.utc) - dt).days
+                    if age_days < 1:
+                        score -= 15  # Very new account = higher risk
+                    elif age_days < 7:
+                        score -= 5
+            except (ValueError, TypeError):
+                pass
+        return max(0, min(100, score))
 
     def list_limited_tokens(self) -> list[str]:
         with self._lock:
             return [
                 token
                 for item in self._accounts.values()
-                if item.get("status") == "限流"
+                if item.get("status") == "rate_limited"
                    and (token := item.get("access_token") or "")
             ]
 
@@ -431,7 +539,7 @@ class AccountService:
         payload = dict(item)
         payload.pop("accessToken", None)
         payload["access_token"] = access_token
-        # CPA/Codex 导出文件里的 type=codex 是导出格式，不是号池套餐类型。
+        # The type=codex in the CPA/Codex export file is the export format, not the pool package type.
         if str(payload.get("type") or "").strip().lower() == "codex":
             payload["export_type"] = "codex"
             payload["source_type"] = "codex"
@@ -518,7 +626,7 @@ class AccountService:
                     self._accounts[access_token] = account
             self._save_accounts()
             items = [dict(item) for item in self._accounts.values()]
-            log_service.add(LOG_TYPE_ACCOUNT, f"新增 {added} 个账号，跳过 {skipped} 个",
+            log_service.add(LOG_TYPE_ACCOUNT, f"Added {added} accounts, skipped {skipped}",
                             {"added": added, "skipped": skipped})
         return {"added": added, "skipped": skipped, "items": items}
 
@@ -542,7 +650,7 @@ class AccountService:
                 else:
                     self._index = 0
                 self._save_accounts()
-                log_service.add(LOG_TYPE_ACCOUNT, f"删除 {removed} 个账号", {"removed": removed})
+                log_service.add(LOG_TYPE_ACCOUNT, f"Deleted {removed} accounts", {"removed": removed})
             items = [dict(item) for item in self._accounts.values()]
         mailbox_result = self._delete_account_mailboxes(removed_accounts) if delete_mailboxes else {"removed": 0, "errors": []}
         return {
@@ -569,15 +677,15 @@ class AccountService:
             if not mailbox and email:
                 mailbox = {"address": email}
             if not str(mailbox.get("address") or "").strip():
-                errors.append({"email": email, "error": "缺少邮箱地址，无法删除邮箱账号"})
+                errors.append({"email": email, "error": "Missing email address, cannot delete email account"})
                 continue
             try:
                 if mail_provider.delete_mailbox(openai_register.config["mail"], mailbox):
                     removed += 1
-                    log_service.add(LOG_TYPE_ACCOUNT, "删除异常账号对应邮箱", {"email": email})
+                    log_service.add(LOG_TYPE_ACCOUNT, "Deleted email corresponding to abnormal account", {"email": email})
             except Exception as exc:
                 errors.append({"email": email, "error": str(exc)})
-                log_service.add(LOG_TYPE_ACCOUNT, "删除异常账号对应邮箱失败", {"email": email, "error": str(exc)})
+                log_service.add(LOG_TYPE_ACCOUNT, "Failed to delete email corresponding to abnormal account", {"email": email, "error": str(exc)})
         return {"removed": removed, "errors": errors}
 
     def update_account(self, access_token: str, updates: dict) -> dict | None:
@@ -588,20 +696,20 @@ class AccountService:
             if current is None:
                 return None
             merged = {**current, **updates, "access_token": access_token}
-            if str(updates.get("status") or "").strip() == "正常":
+            if str(updates.get("status") or "").strip() == "normal":
                 merged["rate_limited_at"] = None
                 merged["rate_limit_reset_at"] = None
             account = self._normalize_account(merged)
             if account is None:
                 return None
-            if account.get("status") == "限流" and config.auto_remove_rate_limited_accounts:
+            if account.get("status") == "rate_limited" and config.auto_remove_rate_limited_accounts:
                 self._accounts.pop(access_token, None)
                 self._save_accounts()
-                log_service.add(LOG_TYPE_ACCOUNT, "自动移除限流账号", {"token": anonymize_token(access_token)})
+                log_service.add(LOG_TYPE_ACCOUNT, "Automatically removed rate limited account", {"token": anonymize_token(access_token)})
                 return None
             self._accounts[access_token] = account
             self._save_accounts()
-            log_service.add(LOG_TYPE_ACCOUNT, "更新账号",
+            log_service.add(LOG_TYPE_ACCOUNT, "Updated account",
                             {"token": anonymize_token(access_token), "status": account.get("status")})
             return dict(account)
         return None
@@ -624,19 +732,19 @@ class AccountService:
                 if not image_quota_unknown:
                     next_item["quota"] = max(0, int(next_item.get("quota") or 0) - 1)
                 if not image_quota_unknown and next_item["quota"] == 0:
-                    next_item["status"] = "限流"
+                    next_item["status"] = "rate_limited"
                     next_item["restore_at"] = next_item.get("restore_at") or None
-                elif next_item.get("status") == "限流":
-                    next_item["status"] = "正常"
+                elif next_item.get("status") == "rate_limited":
+                    next_item["status"] = "normal"
             else:
                 next_item["fail"] = int(next_item.get("fail") or 0) + 1
             account = self._normalize_account(next_item)
             if account is None:
                 return None
-            if account.get("status") == "限流" and config.auto_remove_rate_limited_accounts:
+            if account.get("status") == "rate_limited" and config.auto_remove_rate_limited_accounts:
                 self._accounts.pop(access_token, None)
                 self._save_accounts()
-                log_service.add(LOG_TYPE_ACCOUNT, "自动移除限流账号", {"token": anonymize_token(access_token)})
+                log_service.add(LOG_TYPE_ACCOUNT, "Automatically removed rate limited account", {"token": anonymize_token(access_token)})
                 return None
             self._accounts[access_token] = account
             self._save_accounts()
@@ -805,7 +913,7 @@ class AccountService:
             if current is None:
                 return None
             next_item = dict(current)
-            next_item["status"] = "限流"
+            next_item["status"] = "rate_limited"
             next_item["rate_limited_at"] = self._format_datetime(rate_limited_at)
             next_item["rate_limit_reset_at"] = self._format_datetime(rate_limit_reset_at)
             next_item["restore_at"] = next_item.get("restore_at") or next_item["rate_limit_reset_at"]
@@ -816,7 +924,7 @@ class AccountService:
                 return None
             self._accounts[access_token] = account
             self._save_accounts()
-        log_service.add(LOG_TYPE_ACCOUNT, "账号触发上游 429 限流", {
+        log_service.add(LOG_TYPE_ACCOUNT, "Account triggered upstream 429 rate limit", {
             "token": anonymize_token(access_token),
             "rate_limit_reset_at": account.get("rate_limit_reset_at"),
             "error": str(error or "")[:500],
@@ -853,7 +961,7 @@ class AccountService:
                 client_id=self._clean_string(account.get("client_id")),
             )
         except Exception as exc:
-            log_service.add(LOG_TYPE_ACCOUNT, "OAuth 刷新失败", {
+            log_service.add(LOG_TYPE_ACCOUNT, "OAuth refresh failed", {
                 "token": anonymize_token(access_token),
                 "error": str(exc),
             })
@@ -888,29 +996,27 @@ class AccountService:
 
         refreshed = 0
         errors = []
-        max_workers = min(10, len(access_tokens))
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(self.fetch_remote_info, token, "refresh_accounts"): token
-                for token in access_tokens
-            }
-            for future in as_completed(futures):
-                token = futures[future]
-                try:
-                    account = future.result()
-                except Exception as exc:
-                    if self._is_rate_limit_error(exc):
-                        self.mark_image_rate_limited(
-                            token,
-                            error=str(exc),
-                            headers=getattr(exc, "headers", None),
-                            body=getattr(exc, "body", None),
-                        )
-                    errors.append({"token": anonymize_token(token), "error": str(exc)})
-                    continue
-                if account is not None:
-                    refreshed += 1
+        # Staggered refresh: process sequentially with random jitter to avoid
+        # burst patterns that trigger OpenAI's detection (mass simultaneous refresh).
+        for i, token in enumerate(access_tokens):
+            if i > 0:
+                import time
+                time.sleep(random.uniform(3, 8))  # 3-8s jitter between each refresh
+            try:
+                account = self.fetch_remote_info(token, "refresh_accounts")
+            except Exception as exc:
+                if self._is_rate_limit_error(exc):
+                    self.mark_image_rate_limited(
+                        token,
+                        error=str(exc),
+                        headers=getattr(exc, "headers", None),
+                        body=getattr(exc, "body", None),
+                    )
+                errors.append({"token": anonymize_token(token), "error": str(exc)})
+                continue
+            if account is not None:
+                refreshed += 1
 
         return {
             "refreshed": refreshed,

@@ -144,7 +144,7 @@ class ImageTaskServiceTests(unittest.TestCase):
             result = service.list_tasks(OWNER, ["queued-task", "running-task"])
 
             self.assertEqual([item["status"] for item in result["items"]], ["error", "error"])
-            self.assertTrue(all("已中断" in item.get("error", "") for item in result["items"]))
+            self.assertTrue(all("aborted" in item.get("error", "") for item in result["items"]))
 
 
 if __name__ == "__main__":

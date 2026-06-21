@@ -22,8 +22,8 @@ QuotaKind = Literal[
     "chat_total",
 ]
 
-# 画图 / 对话各自三档：日、月、总。一次扣费会同时落到这三档；任一档用完都拒绝。
-# 总档不参与跨周期重置，日 / 月 在跨自然日 / 月时把 used 清零。
+# Three tiers for both image and chat: daily, monthly, total. A deduction will apply to all three tiers; any tier used up results in rejection.
+# The total tier is not reset periodically. The daily/monthly tiers have their used count cleared on natural daily/monthly transitions.
 _IMAGE_KINDS: tuple[QuotaKind, ...] = ("image_daily", "image_monthly", "image_total")
 _CHAT_KINDS: tuple[QuotaKind, ...] = ("chat_daily", "chat_monthly", "chat_total")
 _PERIODIC_KINDS: tuple[QuotaKind, ...] = (
@@ -43,12 +43,12 @@ def _hash_key(value: str) -> str:
 
 
 def _today_key() -> str:
-    """服务器本地时区自然日，用于日额度跨天判断。"""
+    """Natural day in the server's local timezone, used for daily quota transition check."""
     return date.today().isoformat()
 
 
 def _this_month_key() -> str:
-    """服务器本地时区自然月，用于月额度跨月判断。"""
+    """Natural month in the server's local timezone, used for monthly quota transition check."""
     today = date.today()
     return f"{today.year:04d}-{today.month:02d}"
 
@@ -74,7 +74,7 @@ class AuthService:
 
     @staticmethod
     def _default_name(role: object) -> str:
-        return "管理员密钥" if str(role or "").strip().lower() == "admin" else "普通用户"
+        return "Admin Key" if str(role or "").strip().lower() == "admin" else "Standard User"
 
     @staticmethod
     def _coerce_int(value: object, default: int = 0) -> int:
@@ -117,18 +117,18 @@ class AuthService:
         name = self._clean(raw.get("name")) or self._default_name(role)
         created_at = self._clean(raw.get("created_at")) or _now_iso()
         last_used_at = self._clean(raw.get("last_used_at")) or None
-        # 仅 user 角色保留明文，给 admin 后台"查看 / 复制密钥"用；admin 角色靠 config.auth_key 鉴权，
-        # 不应再额外落明文，统一过滤掉。
+        # Only preserve plaintext for the user role to display/copy in the admin console. Admin role authenticates via config.auth_key
+        # and should not have plaintext stored here; filter it out.
         key_plain = self._clean(raw.get("key")) if role == "user" else ""
         account_tier = self._normalize_account_tier(
             raw.get("account_tier", raw.get("image_account_tier")),
             role=role,
         )
 
-        # 画图三档迁移规则：
-        #   - 已经有 image_total_quota 字段：当前格式，原样读取。
-        #   - 否则 image_quota / quota（旧一次性总额度）→ image_total_quota，日 / 月默认不限额。
-        #   - 三档默认不限的存量用户继续保持对话能力（同对话三档迁移逻辑）。
+        # Image quota transition rules:
+        #   - If image_total_quota exists: read in current format.
+        #   - Otherwise, map image_quota / quota (legacy one-time total quota) -> image_total_quota, daily/monthly default to unlimited.
+        #   - Existing users with three default unlimited tiers continue to retain chat capabilities (same as chat three-tier transition logic).
         legacy_total = raw.get("image_total_quota") is None
         if legacy_total:
             legacy_image_quota = self._coerce_int(raw.get("image_quota", raw.get("quota")), 0)
@@ -175,7 +175,7 @@ class AuthService:
             raw.get("chat_total_unlimited"), default="chat_total_quota" not in raw
         )
 
-        # admin 永远六档全开，所有计数清零，挡掉脏数据。
+        # Admin always has all six tiers enabled, all counters reset to zero to block dirty data.
         if role == "admin":
             image_daily_quota = image_daily_used = 0
             image_monthly_quota = image_monthly_used = 0
@@ -226,8 +226,8 @@ class AuthService:
 
     @staticmethod
     def _apply_period_reset(item: dict[str, object]) -> bool:
-        """跨过自然日/月就把对应 used 清零；返回是否改动了 item。
-        总额度不重置。同时覆盖画图与对话两侧的日 / 月。"""
+        """Reset the corresponding used counts to 0 when crossing a natural day/month; returns whether the item was modified.
+        Total quota is not reset. Applies to daily/monthly for both image and chat sides."""
         changed = False
         today_key = _today_key()
         month_key = _this_month_key()
@@ -272,7 +272,7 @@ class AuthService:
             "account_tier": cls._normalize_account_tier(item.get("account_tier"), role=item.get("role")),
             "can_use_paid_image_accounts": cls._can_use_paid_image_accounts(item),
             "can_use_high_resolution": cls._can_use_paid_image_accounts(item),
-            # 仅暴露"是否可被 admin 回显"，原文要走专门的 get_raw_key 单独取。
+            # Only expose "whether it can be revealed to admin"; the actual plaintext must be retrieved separately via get_raw_key.
             "key_visible": bool(item.get("role") == "user" and cls._clean(item.get("key"))),
         }
         for kind in (*_IMAGE_KINDS, *_CHAT_KINDS):
@@ -288,7 +288,7 @@ class AuthService:
     def list_keys(self, role: AuthRole | None = None) -> list[dict[str, object]]:
         with self._lock:
             self._reload_locked()
-            # 列表读取时也跑一次跨周期清零，避免前端展示陈旧的 daily_used。
+            # Perform periodic reset during list reads as well to avoid the frontend displaying stale daily_used.
             dirty = False
             for item in self._items:
                 if str(item.get("role") or "").strip().lower() == "admin":
@@ -316,13 +316,13 @@ class AuthService:
     def _build_key_hash_locked(self, raw_key: str, *, exclude_id: str = "") -> str:
         candidate = self._clean(raw_key)
         if not candidate:
-            raise ValueError("请输入新的专用密钥")
+            raise ValueError("Please enter a new dedicated key")
         admin_key = self._clean(config.auth_key)
         if admin_key and hmac.compare_digest(candidate, admin_key):
-            raise ValueError("这个密钥和管理员密钥冲突了，请换一个新的密钥")
+            raise ValueError("This key conflicts with the admin key, please choose a new key")
         key_hash = _hash_key(candidate)
         if self._has_key_hash_locked(key_hash, exclude_id=exclude_id):
-            raise ValueError("这个专用密钥已经存在，请换一个新的密钥")
+            raise ValueError("This dedicated key already exists, please choose a new key")
         return key_hash
 
     def _has_name_locked(self, name: str, *, role: AuthRole | None = None, exclude_id: str = "") -> bool:
@@ -355,15 +355,15 @@ class AuthService:
         if not candidate:
             return self._build_default_name_locked(role, exclude_id=exclude_id)
         if self._has_name_locked(candidate, role=role, exclude_id=exclude_id):
-            raise ValueError("这个名称已经在使用中了，换一个更容易区分的名称吧")
+            raise ValueError("This name is already in use, please choose a more distinct name")
         return candidate
 
     @classmethod
     def _validate_quota_hierarchy(cls, item: dict[str, object]) -> None:
-        """同一业务内，短周期限额不能大于长周期限额。
+        """Within the same service, shorter cycle limits cannot exceed longer cycle limits.
 
-        unlimited 表示该档不参与上限约束；例如总额度不限时，月额度可以任意设置。
-        但如果月和总都有限，月额度大于总额度没有意义，也会让前端/用户理解混乱。
+        unlimited means that tier is not subject to constraints; e.g. when total is unlimited, monthly can be set arbitrarily.
+        However, if both monthly and total are limited, setting monthly larger than total makes no sense and confuses users/frontend.
         """
 
         def check(
@@ -379,14 +379,14 @@ class AuthService:
             smaller_quota = cls._coerce_int(item.get(f"{smaller_kind}_quota"), 0)
             larger_quota = cls._coerce_int(item.get(f"{larger_kind}_quota"), 0)
             if smaller_quota > larger_quota:
-                raise ValueError(f"{smaller_label}不能大于{larger_label}")
+                raise ValueError(f"{smaller_label} cannot be greater than {larger_label}")
 
-        check("image_daily", "image_monthly", "画图日限额", "画图月限额")
-        check("image_daily", "image_total", "画图日限额", "画图总额度")
-        check("image_monthly", "image_total", "画图月限额", "画图总额度")
-        check("chat_daily", "chat_monthly", "对话日限额", "对话月限额")
-        check("chat_daily", "chat_total", "对话日限额", "对话总额度")
-        check("chat_monthly", "chat_total", "对话月限额", "对话总额度")
+        check("image_daily", "image_monthly", "Image daily limit", "Image monthly limit")
+        check("image_daily", "image_total", "Image daily limit", "Image total quota")
+        check("image_monthly", "image_total", "Image monthly limit", "Image total quota")
+        check("chat_daily", "chat_monthly", "Chat daily limit", "Chat monthly limit")
+        check("chat_daily", "chat_total", "Chat daily limit", "Chat total quota")
+        check("chat_monthly", "chat_total", "Chat monthly limit", "Chat total quota")
 
     def create_key(
         self,
@@ -413,7 +413,7 @@ class AuthService:
             normalized_name = self._build_name_locked(name, role=role)
             custom_key = self._clean(key)
             if custom_key:
-                # 自定义密钥走和"编辑里换 key"同一套校验：非空、不与管理员密钥冲突、不与其他用户重复。
+                # Custom key uses the same validation as "change key in edit": non-empty, no admin key conflict, no duplicate user keys.
                 key_hash = self._build_key_hash_locked(custom_key)
                 raw_key = custom_key
             else:
@@ -430,7 +430,7 @@ class AuthService:
                 "name": normalized_name,
                 "role": role,
                 "key_hash": key_hash,
-                # admin 不落明文：admin 鉴权走 config.auth_key，不通过 auth_keys.json。
+                # admin does not store plaintext: admin auth uses config.auth_key, not auth_keys.json.
                 "key": "" if is_admin else raw_key,
                 "account_tier": self._normalize_account_tier(account_tier, role=role),
                 "enabled": True,
@@ -507,7 +507,7 @@ class AuthService:
                     if should_validate_quota:
                         self._validate_quota_hierarchy(next_item)
                 else:
-                    # admin 强制全档不限额，相关计数永远清零，挡掉外部恶意写入。
+                    # admin forces all tiers to be unlimited, related counters are always zeroed to prevent external malicious writes.
                     for kind in (*_IMAGE_KINDS, *_CHAT_KINDS):
                         next_item[f"{kind}_quota"] = 0
                         next_item[f"{kind}_used"] = 0
@@ -520,9 +520,9 @@ class AuthService:
 
     @classmethod
     def _apply_quota_updates_locked(cls, target: dict[str, object], updates: dict[str, object]) -> None:
-        """把 update_key 传入的额度相关字段写到 target，保持 admin 路径不受影响。
-        每档 quota 与 unlimited 都按字面值透传；reset_<kind>_used 把对应 used 归零并刷新 reset_at。
-        旧 reset_used 等价于 reset_image_total_used，避免老 admin 客户端发布期间报错。
+        """Write the quota-related fields passed in update_key to target, keeping admin path unaffected.
+        Every tier quota and unlimited are passed through literally; reset_<kind>_used zeroes the corresponding used count and refreshes reset_at.
+        Legacy reset_used is equivalent to reset_image_total_used to avoid errors on legacy admin clients during release.
         """
         for kind in (*_IMAGE_KINDS, *_CHAT_KINDS):
             quota_key = f"{kind}_quota"
@@ -539,7 +539,7 @@ class AuthService:
                 elif _is_monthly_kind(kind):
                     target[f"{kind}_reset_at"] = _this_month_key()
         if updates.get("reset_used"):
-            # 老前端协议；映射到画图总额度计数。
+            # Legacy frontend protocol; maps to image total quota counter.
             target["image_total_used"] = 0
 
     @staticmethod
@@ -557,7 +557,7 @@ class AuthService:
             for index, item in enumerate(self._items):
                 if item.get("id") != normalized_id:
                     continue
-                # 读取单条时也跑一次跨周期清零，让前端拉自己 identity 时看到的是当下的余额。
+                # Run periodic reset when reading a single item as well, so that when frontend fetches its own identity, it sees current balances.
                 next_item = dict(item)
                 if self._apply_period_reset(next_item):
                     self._items[index] = next_item
@@ -575,8 +575,8 @@ class AuthService:
         kinds: tuple[QuotaKind, ...],
         block_label_map: dict[str, str],
     ) -> dict[str, object]:
-        """在已持锁场景下扣减一组 kinds（任一档不足都拒绝）。
-        管理员直接放行；返回结构对齐画图 / 对话两侧的语义。"""
+        """Deduct a set of kinds in a locked context (rejections if any tier is insufficient).
+        Admins are directly released; the returned structure aligns with semantics on both image and chat sides."""
         delta = max(0, int(amount or 0))
         if not key_id or delta == 0:
             return {"ok": True, "remaining": None, "unlimited": True, "reason": ""}
@@ -595,8 +595,8 @@ class AuthService:
                 used = self._coerce_int(next_item.get(f"{kind}_used"), 0)
                 unlimited = bool(next_item.get(f"{kind}_unlimited", False))
                 snapshots.append((kind, quota, used, unlimited))
-                # unlimited 只解除 quota 上限校验；used 仍照常累加，
-                # 让管理员后续切换到限额时不会丢失"日 ⊂ 月 ⊂ 总"的历史使用数据。
+                # unlimited only bypasses the quota limit validation; used is still accumulated as usual,
+                # ensuring that when an admin switches to a limit later, historical usage data for "daily ⊂ monthly ⊂ total" is not lost.
                 if unlimited:
                     continue
                 if max(0, quota - used) < delta:
@@ -607,11 +607,11 @@ class AuthService:
                     "blocked": blocked,
                     "unlimited": False,
                     "reason": _block_reason(blocked, block_label_map),
-                    # 老协议字段：画图侧入口处会读 remaining 决定 toast 文案。
+                    # Legacy protocol field: the image side entrance reads remaining to decide toast content.
                     "remaining": _remaining_snapshot(next_item, kinds),
                 }
-            # 通过校验：所有档位（含 unlimited）都把本次 delta 累加进 used，
-            # 这样日 / 月 / 总的 used 才能保持"包含关系"，不会因为某档不限就漏记。
+            # Validation passed: all tiers (including unlimited) add delta to used,
+            # so that daily / monthly / total used counts maintain "inclusion relationship", not missed because a tier is unlimited.
             for kind, quota, used, unlimited in snapshots:
                 next_item[f"{kind}_used"] = used + delta
             self._items[index] = next_item
@@ -626,7 +626,7 @@ class AuthService:
                 "reason": "",
                 "remaining": _remaining_snapshot(next_item, kinds),
             }
-        return {"ok": False, "remaining": 0, "unlimited": False, "reason": "密钥不存在"}
+        return {"ok": False, "remaining": 0, "unlimited": False, "reason": "Key does not exist"}
 
     def _refund_kinds_locked(
         self,
@@ -647,8 +647,8 @@ class AuthService:
             self._apply_period_reset(next_item)
             changed = False
             for kind in kinds:
-                # 与 _consume_kinds_locked 对称：unlimited 档当时也累加了 used，
-                # 退款也得对称还回来，否则 used 计数会单调上涨。
+                # Symmetric with _consume_kinds_locked: unlimited tier also accumulated used at that time,
+                # refunds must symmetrically deduct it back, otherwise used count will monotonically rise.
                 used = self._coerce_int(next_item.get(f"{kind}_used"), 0)
                 if used <= 0:
                     continue
@@ -668,27 +668,27 @@ class AuthService:
                 "reason": "",
                 "remaining": _remaining_snapshot(next_item, kinds),
             }
-        return {"ok": False, "remaining": 0, "unlimited": False, "reason": "密钥不存在"}
+        return {"ok": False, "remaining": 0, "unlimited": False, "reason": "Key does not exist"}
 
     def consume_image_quota(self, key_id: str, amount: int) -> dict[str, object]:
-        """扣减用户密钥的画图额度（日 / 月 / 总同时扣）。
-        admin 全放行；任一档剩余不够直接拒绝（API 层据此返 402）。"""
+        """Deduct image quota of user key (daily / monthly / total deducted simultaneously).
+        admin fully bypassed; direct rejection if any tier has insufficient remainder (API layer returns 402)."""
         normalized_id = self._clean(key_id)
         with self._lock:
             return self._consume_kinds_locked(normalized_id, amount, _IMAGE_KINDS, _IMAGE_KIND_LABEL)
 
     def refund_image_quota(self, key_id: str, amount: int) -> dict[str, object]:
-        """画图上游真失败时对画图三档同时退款。"""
+        """Symmetrically refund all three image tiers when upstream image generation genuinely fails."""
         normalized_id = self._clean(key_id)
         with self._lock:
             return self._refund_kinds_locked(normalized_id, amount, _IMAGE_KINDS)
 
-    # 兼容旧调用名（image_task_service / 其他模块直接 import 用过的）。
+    # Compatible with legacy names (used in imports by image_task_service or other modules).
     consume_quota = consume_image_quota
     refund_quota = refund_image_quota
 
     def consume_chat_quota(self, key_id: str, amount: int = 1) -> dict[str, object]:
-        """扣减用户密钥的对话额度（日 / 月 / 总同时扣）。"""
+        """Deduct chat quota of user key (daily / monthly / total deducted simultaneously)."""
         normalized_id = self._clean(key_id)
         with self._lock:
             return self._consume_kinds_locked(normalized_id, amount, _CHAT_KINDS, _CHAT_KIND_LABEL)
@@ -699,9 +699,9 @@ class AuthService:
             return self._refund_kinds_locked(normalized_id, amount, _CHAT_KINDS)
 
     def reveal_key(self, key_id: str, *, role: AuthRole | None = None) -> dict[str, object] | None:
-        """给 admin 后台读取明文密钥；只对 user 角色有效。
-        返回 {"key": str, "key_visible": bool}：旧数据未落明文时 key_visible=False，
-        前端据此提示 admin 走"重置密钥"流程。"""
+        """Read raw plaintext key for admin backend; only valid for user role.
+        Returns {"key": str, "key_visible": bool}: key_visible=False if legacy data does not store plaintext,
+        frontend prompts admin to proceed with "reset key" workflow."""
         normalized_id = self._clean(key_id)
         if not normalized_id:
             return None
@@ -719,8 +719,8 @@ class AuthService:
         return None
 
     def regenerate_key(self, key_id: str, *, role: AuthRole | None = None, key: str = "") -> tuple[dict[str, object], str] | None:
-        """给老数据"重置后回显"用：换新密钥（落明文 + 哈希），旧密钥立即失效。
-        admin 角色不允许走这条路径。传入 key 则使用自定义值，否则自动生成。"""
+        """Used for legacy data "reset and echo": replace with new key (saves plaintext + hash), old key immediately invalidated.
+        admin role is not allowed to use this path. If key is provided, use custom value, otherwise auto-generate."""
         normalized_id = self._clean(key_id)
         if not normalized_id:
             return None
@@ -799,25 +799,25 @@ class AuthService:
 
 
 _IMAGE_KIND_LABEL = {
-    "image_daily": "今日画图额度",
-    "image_monthly": "本月画图额度",
-    "image_total": "画图总额度",
+    "image_daily": "Daily image quota",
+    "image_monthly": "Monthly image quota",
+    "image_total": "Total image quota",
 }
 
 _CHAT_KIND_LABEL = {
-    "chat_daily": "今日对话额度",
-    "chat_monthly": "本月对话额度",
-    "chat_total": "对话总额度",
+    "chat_daily": "Daily chat quota",
+    "chat_monthly": "Monthly chat quota",
+    "chat_total": "Total chat quota",
 }
 
 
 def _block_reason(blocked: list[str], label_map: dict[str, str]) -> str:
     labels = [label_map.get(kind, kind) for kind in blocked]
-    return "、".join(labels) + "已用完，请联系管理员追加额度后再试"
+    return ", ".join(labels) + " used up, please contact admin to add quota and try again"
 
 
 def _remaining_snapshot(item: dict[str, object], kinds: tuple[QuotaKind, ...]) -> dict[str, int | None]:
-    """指定 kinds 当前剩余的快照，给前端实时展示用。"""
+    """Snapshot of current remaining limits for specified kinds, for real-time frontend display."""
     snapshot: dict[str, int | None] = {}
     for kind in kinds:
         quota = AuthService._coerce_int(item.get(f"{kind}_quota"), 0)
