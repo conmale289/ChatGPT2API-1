@@ -145,14 +145,6 @@ class OpenAIBackendAPI:
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
             "Priority": "u=1, i",
-            "Sec-Ch-Ua": self.fp["sec-ch-ua"],
-            "Sec-Ch-Ua-Arch": '"x86"',
-            "Sec-Ch-Ua-Bitness": '"64"',
-            "Sec-Ch-Ua-Full-Version-List": self.fp["sec-ch-ua"],
-            "Sec-Ch-Ua-Mobile": self.fp["sec-ch-ua-mobile"],
-            "Sec-Ch-Ua-Model": '""',
-            "Sec-Ch-Ua-Platform": self.fp["sec-ch-ua-platform"],
-            "Sec-Ch-Ua-Platform-Version": '"15.0.0"',
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
@@ -162,6 +154,18 @@ class OpenAIBackendAPI:
             "OAI-Client-Version": self.client_version,
             "OAI-Client-Build-Number": self.client_build_number,
         })
+        # Sec-Ch-Ua headers are Chromium-only; Safari doesn't send them
+        if self.fp.get("sec-ch-ua"):
+            self.session.headers.update({
+                "Sec-Ch-Ua": self.fp["sec-ch-ua"],
+                "Sec-Ch-Ua-Arch": f'"{self.fp.get("arch", "x86")}"',
+                "Sec-Ch-Ua-Bitness": '"64"',
+                "Sec-Ch-Ua-Full-Version-List": self.fp["sec-ch-ua"],
+                "Sec-Ch-Ua-Mobile": self.fp["sec-ch-ua-mobile"],
+                "Sec-Ch-Ua-Model": '""',
+                "Sec-Ch-Ua-Platform": self.fp["sec-ch-ua-platform"],
+                "Sec-Ch-Ua-Platform-Version": '"15.0.0"',
+            })
         if self.access_token:
             self.session.headers["Authorization"] = f"Bearer {self.access_token}"
 
@@ -195,6 +199,9 @@ class OpenAIBackendAPI:
         fp.setdefault("sec-ch-ua-platform", '"Windows"')
         # Carry per-account proxy as transient key (popped by __init__)
         fp["__proxy__"] = str(account.get("proxy") or "").strip()
+        # Carry arch/cores for consistent PoW fingerprinting
+        fp.setdefault("arch", "x86")
+        fp.setdefault("cores", "16")
         return fp
 
     def _headers(self, path: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -373,6 +380,7 @@ class OpenAIBackendAPI:
                 self.user_agent,
                 script_sources=self.pow_script_sources,
                 data_build=self.pow_data_build,
+                cores=int(self.fp.get("cores") or 0),
             )
 
         turnstile_token = ""
@@ -1524,7 +1532,7 @@ class OpenAIBackendAPI:
         """Get the sentinel token required for the current mode chat."""
         path = "/backend-api/sentinel/chat-requirements" if self.access_token else "/backend-anon/sentinel/chat-requirements"
         context = "auth_chat_requirements" if self.access_token else "noauth_chat_requirements"
-        body = {"p": build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build)}
+        body = {"p": build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build, cores=int(self.fp.get("cores") or 0))}
         response = self.session.post(
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json"}),

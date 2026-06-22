@@ -57,6 +57,7 @@ def build_pow_config(
     user_agent: str,
     script_sources: Sequence[str] | None = None,
     data_build: str = "",
+    cores: int = 0,
 ) -> list[Any]:
     navigator_key = random.choice([
         "registerProtocolHandler−function registerProtocolHandler() { [native code] }",
@@ -157,7 +158,7 @@ def build_pow_config(
         time.perf_counter() * 1000,
         new_uuid(),
         "",
-        random.choice(CORES),
+        cores if cores > 0 else random.choice(CORES),
         time.time() * 1000 - (time.perf_counter() * 1000),
     ]
 
@@ -183,9 +184,10 @@ def build_legacy_requirements_token(
     user_agent: str,
     script_sources: Sequence[str] | None = None,
     data_build: str = "",
+    cores: int = 0,
 ) -> str:
     seed = format(random.random())
-    config = build_pow_config(user_agent, script_sources=script_sources, data_build=data_build)
+    config = build_pow_config(user_agent, script_sources=script_sources, data_build=data_build, cores=cores)
     answer, _ = _pow_generate(seed, "0fffff", config)
     return "gAAAAAC" + answer
 
@@ -196,8 +198,9 @@ def build_proof_token(
     user_agent: str,
     script_sources: Sequence[str] | None = None,
     data_build: str = "",
+    cores: int = 0,
 ) -> str:
-    config = build_pow_config(user_agent, script_sources=script_sources, data_build=data_build)
+    config = build_pow_config(user_agent, script_sources=script_sources, data_build=data_build, cores=cores)
     answer, solved = _pow_generate(seed, difficulty, config)
     if not solved:
         raise RuntimeError(f"failed to solve proof token: difficulty={difficulty}")
